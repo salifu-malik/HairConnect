@@ -26,3 +26,13 @@ Thumbs.db
 
 # Local screenshots
 /screenshots/
+
+
+# Frontend
+/frontend/.env
+/frontend/.env.*
+!/frontend/.env.example
+/frontend/node_modules/
+/frontend/.idea/
+/frontend/dist/
+/frontend/*.tsbuildinfo
