@@ -102,6 +102,15 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 } elseif ($requestUri === '/api/shops/available' && $requestMethod === 'GET') {
     (new ShopController())->getAvailableShops();
 
+
+// BARBER ROUTES
+
+} elseif ($requestUri === '/api/barber/profile' && $requestMethod === 'POST') {
+    (new BarberController())->createProfile();
+
+
+// SHOP OWNER BARBER ROUTES
+
 } elseif ($requestUri === '/api/shop-owner/barbers' && $requestMethod === 'GET') {
     (new BarberController())->getMyBarbers();
 } elseif (
