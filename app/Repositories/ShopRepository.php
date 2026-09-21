@@ -176,4 +176,26 @@ class ShopRepository
             'Invalid shop approval status.'
         );
     }
+
+    //Find pending shops
+
+    public function findPendingShops(): array
+    {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM shops
+        WHERE approval_status = 'pending'
+        ORDER BY created_at ASC
+    ");
+
+        $stmt->execute();
+
+        $shops = [];
+
+        foreach ($stmt->fetchAll() as $data) {
+            $shops[] = new Shop($data);
+        }
+
+        return $shops;
+    }
 }

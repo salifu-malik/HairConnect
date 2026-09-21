@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-//ini_set('display_errors', '1');
-//ini_set('display_startup_errors', '1');
-//error_reporting(E_ALL);
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+error_reporting(E_ALL);
 
 // CORS
 $allowedOrigins = [
@@ -30,12 +30,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once __DIR__ . '/../bootstrap.php';
 
-use Api\Controllers\Auth\AuthController;
+use Api\Controllers\AuthController;
+use Api\Controllers\BookingController;
+use Api\Controllers\StoreController;
+use Api\Controllers\ProfileController;
 use Api\Controllers\Barber\BarberController;
-use Api\Controllers\Booking\BookingController;
-use Api\Controllers\Profile\ProfileController;
 use Api\Controllers\ShopOwner\ShopController;
-use Api\Controllers\Store\StoreController;
+use App\Helpers\DatabaseManager;
 
 $config = require __DIR__ . '/../config/database.php';
 
