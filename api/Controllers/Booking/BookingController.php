@@ -1,14 +1,13 @@
 <?php
 
-namespace Api\Controllers;
 
-use App\Services\BookingService;
-use App\Repositories\ShopRepository;
-use App\Repositories\BarberRepository;
-use App\Repositories\ServiceRepository;
-use App\Repositories\AppointmentRepository;
-use App\Repositories\BarberScheduleRepository;
 use App\Helpers\JwtHelper;
+use App\Repositories\AppointmentRepository;
+use App\Repositories\BarberRepository;
+use App\Repositories\BarberScheduleRepository;
+use App\Repositories\ServiceRepository;
+use App\Repositories\ShopRepository;
+use App\Services\BookingService;
 
 class BookingController
 {

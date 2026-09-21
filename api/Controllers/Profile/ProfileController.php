@@ -1,10 +1,9 @@
 <?php
 
-namespace Api\Controllers;
 
 use App\Helpers\JwtHelper;
-use App\Repositories\UserRepository;
 use App\Repositories\SessionRepository;
+use App\Repositories\UserRepository;
 
 class ProfileController
 {

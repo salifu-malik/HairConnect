@@ -1,10 +1,9 @@
 <?php
 
-namespace Api\Controllers;
 
-use App\Services\StoreService;
-use App\Repositories\ProductRepository;
 use App\Repositories\OrderRepository;
+use App\Repositories\ProductRepository;
+use App\Services\StoreService;
 
 class StoreController {
     private StoreService $storeService;

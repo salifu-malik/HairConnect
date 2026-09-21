@@ -1,11 +1,10 @@
 <?php
 
-namespace Api\Controllers;
 
-use App\Services\AuthService;
-use App\Repositories\UserRepository;
-use App\Repositories\SessionRepository;
 use App\Repositories\PasswordResetRepository;
+use App\Repositories\SessionRepository;
+use App\Repositories\UserRepository;
+use App\Services\AuthService;
 use App\Services\MailService;
 
 class AuthController

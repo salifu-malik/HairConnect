@@ -1,12 +1,11 @@
 <?php
 
-namespace Api\Controllers;
 
-use App\Services\BarberService;
+use App\Helpers\JwtHelper;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
 use App\Repositories\UserRepository;
-use App\Helpers\JwtHelper;
+use App\Services\BarberService;
 
 class BarberController
 {

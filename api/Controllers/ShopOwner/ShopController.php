@@ -1,11 +1,10 @@
 <?php
 
-namespace Api\Controllers;
 
-use App\Services\ShopService;
+use App\Helpers\JwtHelper;
 use App\Repositories\ShopRepository;
 use App\Repositories\UserRepository;
-use App\Helpers\JwtHelper;
+use App\Services\ShopService;
 
 class ShopController
 {
