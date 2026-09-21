@@ -37,6 +37,7 @@ use Api\Controllers\ProfileController;
 use Api\Controllers\Barber\BarberController;
 use Api\Controllers\ShopOwner\ShopController;
 use App\Helpers\DatabaseManager;
+use Api\Controllers\Admin\AdminController;
 
 $config = require __DIR__ . '/../config/database.php';
 
@@ -144,6 +145,19 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
     (new StoreController())->placeOrder();
 
+
+    // ADMIN ROUTES
+} elseif (
+    $requestUri === '/api/admin/shops/pending'
+    && $requestMethod === 'GET'
+) {
+    (new AdminController())->getPendingShops();
+
+} elseif (
+    preg_match('#^/api/admin/shops/([0-9]+)/approval$#', $requestUri, $matches)
+    && $requestMethod === 'PATCH'
+) {
+    (new AdminController())->updateShopApproval((int) $matches[1]);
 
 
     //404
