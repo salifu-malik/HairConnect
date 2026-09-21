@@ -84,6 +84,85 @@ class BarberService
         ]);
     }
 
+    //Apply to a shop service logic
+
+    public function applyToShop(
+        int $userId,
+        int $shopId
+    ): void {
+        if ($userId <= 0) {
+            throw new Exception('Invalid authenticated user.');
+        }
+
+        if ($shopId <= 0) {
+            throw new Exception('Invalid shop.');
+        }
+
+        // Verify authenticated user
+        $user = $this->userRepository->findById($userId);
+
+        if (!$user) {
+            throw new Exception('User not found.');
+        }
+
+        // Verify BARBER role
+        $roles = $this->userRepository->getRoles($userId);
+
+        if (!in_array('BARBER', $roles, true)) {
+            throw new Exception(
+                'Only users with the BARBER role can apply to a shop.'
+            );
+        }
+
+        // Find barber profile
+        $barber = $this->barberRepository->findByUserId($userId);
+
+        if (!$barber) {
+            throw new Exception(
+                'You must create a barber profile before applying to a shop.'
+            );
+        }
+
+        // A barber can only work at one shop
+        if ($barber->shopId !== null) {
+            throw new Exception(
+                'You are already assigned to a shop or have an existing shop application.'
+            );
+        }
+
+        // Verify shop
+        $shop = $this->shopRepository->findById($shopId);
+
+        if (!$shop) {
+            throw new Exception('Shop not found.');
+        }
+
+        // Shop must be approved and active
+        if ($shop->approvalStatus !== 'approved') {
+            throw new Exception(
+                'You can only apply to an approved shop.'
+            );
+        }
+
+        if ($shop->status !== 'active') {
+            throw new Exception(
+                'You can only apply to an active shop.'
+            );
+        }
+
+        // Apply
+        $updated = $this->barberRepository->applyToShop(
+            $barber->id,
+            $shop->id
+        );
+
+        if (!$updated) {
+            throw new Exception(
+                'Failed to submit shop application.'
+            );
+        }
+    }
+
     /**
      * Get all barbers belonging to the authenticated shop owner.
      */
