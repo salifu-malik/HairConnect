@@ -35,6 +35,7 @@ use Api\Controllers\BookingController;
 use Api\Controllers\StoreController;
 use Api\Controllers\ProfileController;
 use Api\Controllers\Barber\BarberController;
+use Api\Controllers\Barber\HomeServiceController;
 use Api\Controllers\ShopOwner\ShopController;
 use App\Helpers\DatabaseManager;
 use Api\Controllers\Admin\AdminController;
@@ -111,6 +112,43 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
 } elseif ($requestUri === '/api/barber/shop-application' && $requestMethod === 'POST') {
     (new BarberController())->applyToShop();
+
+    // BARBER HOME SERVICE ROUTES
+} elseif (
+    $requestUri === '/api/barber/home-services'
+    && $requestMethod === 'POST'
+) {
+    (new HomeServiceController())->create();
+
+} elseif (
+    $requestUri === '/api/barber/home-services'
+    && $requestMethod === 'GET'
+) {
+    (new HomeServiceController())->getMyServices();
+
+} elseif (
+    preg_match(
+        '#^/api/barber/home-services/([0-9]+)$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'PUT'
+) {
+    (new HomeServiceController())->update(
+        (int) $matches[1]
+    );
+
+} elseif (
+    preg_match(
+        '#^/api/barber/home-services/([0-9]+)/status$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'PATCH'
+) {
+    (new HomeServiceController())->updateStatus(
+        (int) $matches[1]
+    );
 
 
 // SHOP OWNER BARBER ROUTES
