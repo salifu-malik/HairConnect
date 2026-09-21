@@ -108,6 +108,9 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 } elseif ($requestUri === '/api/barber/profile' && $requestMethod === 'POST') {
     (new BarberController())->createProfile();
 
+} elseif ($requestUri === '/api/barber/shop-application' && $requestMethod === 'POST') {
+    (new BarberController())->applyToShop();
+
 
 // SHOP OWNER BARBER ROUTES
 
