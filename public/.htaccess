@@ -1,0 +1,14 @@
+<IfModule mod_rewrite.c>
+
+    RewriteEngine On
+
+    RewriteBase /barber-backend/public/
+
+    # If the file or directory exists, serve it directly
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+
+    # Otherwise send the request to the front controller
+    RewriteRule ^ index.php [QSA,L]
+
+</IfModule>

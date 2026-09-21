@@ -1,0 +1,11 @@
+<IfModule mod_rewrite.c>
+
+    RewriteEngine On
+
+    # Project base path
+    RewriteBase /barber-backend/
+
+    # Send API requests to the public front controller
+    RewriteRule ^api/(.*)$ public/index.php [QSA,L]
+
+</IfModule>

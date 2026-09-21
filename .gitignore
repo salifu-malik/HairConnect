@@ -1,0 +1,28 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# PhpStorm / IntelliJ
+.idea/
+
+# Composer dependencies
+/vendor/
+
+# Private keys / credentials
+/keys/
+
+# Logs
+*.log
+/storage/logs/
+
+# Temporary / test files
+reset-test-password.php
+test_mail.php
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local screenshots
+/screenshots/
