@@ -195,4 +195,58 @@ class BarberController
 
         return (int) $userId;
     }
+
+    //Create  Barber profile
+
+    public function createProfile(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        $userId = $this->getAuthenticatedUserId();
+
+        if ($userId === null) {
+            http_response_code(401);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Authentication required.'
+            ]);
+
+            return;
+        }
+
+        $data = json_decode(
+            file_get_contents('php://input'),
+            true
+        );
+
+        if (!is_array($data)) {
+            $data = [];
+        }
+
+        try {
+            $barberId = $this->barberService->registerIndependentBarber(
+                $userId,
+                $data
+            );
+
+            http_response_code(201);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'Barber profile created successfully.',
+                'data' => [
+                    'barber_id' => $barberId
+                ]
+            ]);
+        } catch (\Exception $e) {
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
 }
