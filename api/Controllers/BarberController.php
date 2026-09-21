@@ -249,4 +249,55 @@ class BarberController
         }
     }
 
+    //Controller to apply for a shop
+    public function applyToShop(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        $userId = $this->getAuthenticatedUserId();
+
+        if ($userId === null) {
+            http_response_code(401);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Authentication required.'
+            ]);
+
+            return;
+        }
+
+        $data = json_decode(
+            file_get_contents('php://input'),
+            true
+        );
+
+        if (!is_array($data)) {
+            $data = [];
+        }
+
+        $shopId = (int) ($data['shop_id'] ?? 0);
+
+        try {
+            $this->barberService->applyToShop(
+                $userId,
+                $shopId
+            );
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'Shop application submitted successfully.'
+            ]);
+        } catch (\Exception $e) {
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
 }
