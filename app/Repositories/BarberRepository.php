@@ -87,6 +87,31 @@ class BarberRepository
         return (int) $this->db->lastInsertId();
     }
 
+    //Applying to  a shop
+
+    public function applyToShop(
+        int $barberId,
+        int $shopId
+    ): bool {
+        $stmt = $this->db->prepare("
+        UPDATE barbers
+        SET
+            shop_id = :shop_id,
+            approval_status = 'pending',
+            status = 'inactive',
+            approved_at = NULL,
+            approved_by = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = :id
+          AND shop_id IS NULL
+    ");
+
+        return $stmt->execute([
+            'id' => $barberId,
+            'shop_id' => $shopId,
+        ]);
+    }
+
     public function findById(int $id): ?Barber
     {
         $stmt = $this->db->prepare("
