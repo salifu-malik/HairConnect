@@ -1,6 +1,6 @@
 <?php
 
-
+namespace Api\Controllers\Barber;
 use App\Helpers\JwtHelper;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;

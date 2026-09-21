@@ -1,6 +1,6 @@
 <?php
 
-
+namespace Api\Controllers\ShopOwner;
 use App\Helpers\JwtHelper;
 use App\Repositories\ShopRepository;
 use App\Repositories\UserRepository;
