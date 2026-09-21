@@ -128,7 +128,7 @@ class AdminController
 
         $token = trim($matches[1]);
 
-        $payload = JwtHelper::verifyToken($token);
+        $payload = JwtHelper::decode($token);
 
         if (!$payload || !isset($payload['user_id'])) {
             throw new Exception('Invalid or expired token.');

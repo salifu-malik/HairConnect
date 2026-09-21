@@ -1,5 +1,6 @@
 <?php
 
+namespace Api\Controllers\Auth;
 
 use App\Repositories\PasswordResetRepository;
 use App\Repositories\SessionRepository;

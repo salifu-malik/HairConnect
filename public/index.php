@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once __DIR__ . '/../bootstrap.php';
 
-use Api\Controllers\AuthController;
+use Api\Controllers\Auth\AuthController;
 use Api\Controllers\BookingController;
 use Api\Controllers\StoreController;
 use Api\Controllers\ProfileController;
