@@ -113,6 +113,20 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 } elseif ($requestUri === '/api/barber/shop-application' && $requestMethod === 'POST') {
     (new BarberController())->applyToShop();
 
+    // BARBER SCHEDULE ROUTES
+
+} elseif (
+    $requestUri === '/api/barber/schedule'
+    && $requestMethod === 'GET'
+) {
+    (new BarberScheduleController())->getMySchedule();
+
+} elseif (
+    $requestUri === '/api/barber/schedule'
+    && $requestMethod === 'POST'
+) {
+    (new BarberScheduleController())->create();
+
     // BARBER HOME SERVICE ROUTES
 } elseif (
     $requestUri === '/api/barber/home-services'
