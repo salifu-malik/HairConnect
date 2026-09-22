@@ -12,7 +12,7 @@ class BarberHomeServiceRepository
 
     public function __construct()
     {
-        $this->db = DatabaseManager::getConnection('booking');
+        $this->db = DatabaseManager::getConnection('booking_db');
     }
 
 
