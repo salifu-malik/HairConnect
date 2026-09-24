@@ -8,6 +8,7 @@ use App\Repositories\BarberScheduleRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
 use App\Services\BookingService;
+use App\Repositories\BarberHomeServiceRepository;
 
 class BookingController
 {
@@ -20,7 +21,8 @@ class BookingController
             new BarberRepository(),
             new ServiceRepository(),
             new AppointmentRepository(),
-            new BarberScheduleRepository()
+            new BarberScheduleRepository(),
+            new BarberHomeServiceRepository()
         );
     }
 
