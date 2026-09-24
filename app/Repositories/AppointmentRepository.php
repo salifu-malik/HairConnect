@@ -24,6 +24,8 @@ class AppointmentRepository
                 shop_id,
                 barber_id,
                 service_id,
+                service_location,
+                duration_minutes,
                 appointment_date,
                 appointment_time
             )
@@ -32,6 +34,8 @@ class AppointmentRepository
                 :shop_id,
                 :barber_id,
                 :service_id,
+                :service_location,
+                :duration_minutes,
                 :appointment_date,
                 :appointment_time
             )
@@ -42,53 +46,50 @@ class AppointmentRepository
             'shop_id' => $data['shop_id'] ?? null,
             'barber_id' => $data['barber_id'],
             'service_id' => $data['service_id'],
+            'service_location' => $data['service_location'],
+            'duration_minutes' => $data['duration_minutes'],
             'appointment_date' => $data['appointment_date'],
             'appointment_time' => $data['appointment_time'],
         ]);
     }
 
     /**
-     * Check whether a barber already has an appointment
-     * that overlaps the requested time range.
+     * Get all active appointments for a barber
+     * on a specific date.
      *
-     * $startTime and $endTime must be in HH:MM format.
+     * Cancelled appointments are excluded because
+     * they no longer occupy the barber's schedule.
      */
-    public function hasConflict(
+    public function findByBarberAndDate(
         int $barberId,
-        string $appointmentDate,
-        string $startTime,
-        string $endTime
-    ): bool {
+        string $appointmentDate
+    ): array {
         $stmt = $this->db->prepare("
             SELECT
                 id,
-                appointment_time
+                customer_id,
+                shop_id,
+                barber_id,
+                service_id,
+                service_location,
+                duration_minutes,
+                appointment_date,
+                appointment_time,
+                status,
+                created_at,
+                updated_at
             FROM appointments
             WHERE barber_id = :barber_id
               AND appointment_date = :appointment_date
               AND status IN ('pending', 'confirmed')
-              AND appointment_time < :end_time
-            LIMIT 1
+            ORDER BY appointment_time ASC
         ");
 
         $stmt->execute([
             'barber_id' => $barberId,
             'appointment_date' => $appointmentDate,
-            'end_time' => $startTime,
         ]);
 
-        $appointments = $stmt->fetchAll();
-
-        /*
-         * The initial query above only identifies appointments
-         * that start before the requested end time.
-         *
-         * The actual appointment duration is not stored in the
-         * appointments table, so duration-based conflict checking
-         * will be completed in BookingService using the selected
-         * service duration.
-         */
-
-        return !empty($appointments);
+        return $stmt->fetchAll();
     }
 }
