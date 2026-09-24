@@ -141,59 +141,62 @@ class BarberController
         }
     }
 
-    /**
-     * Get authenticated user ID from JWT.
-     */
-    private function getAuthenticatedUserId(): ?int
-    {
+/**
+ * Get authenticated user ID from JWT.
+ */
+private function getAuthenticatedUserId(): int
+{
+    $authorizationHeader =
+        $_SERVER['HTTP_AUTHORIZATION']
+        ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+        ?? '';
+
+    if (
+        $authorizationHeader === ''
+        && function_exists('getallheaders')
+    ) {
+        $headers = getallheaders();
+
         $authorizationHeader =
-            $_SERVER['HTTP_AUTHORIZATION']
-            ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+            $headers['Authorization']
+            ?? $headers['authorization']
             ?? '';
-
-        if (
-            $authorizationHeader === ''
-            && function_exists('getallheaders')
-        ) {
-            $headers = getallheaders();
-
-            $authorizationHeader =
-                $headers['Authorization']
-                ?? $headers['authorization']
-                ?? '';
-        }
-
-        if ($authorizationHeader === '') {
-            return null;
-        }
-
-        if (!preg_match(
-            '/^Bearer\s+(.+)$/i',
-            trim($authorizationHeader),
-            $matches
-        )) {
-            return null;
-        }
-
-        $token = trim($matches[1]);
-
-        $payload = JwtHelper::decode($token);
-
-        if ($payload === null) {
-            return null;
-        }
-
-        $userId = $payload['user_id'] ?? null;
-
-        if (
-            $userId === null ||
-            !is_numeric($userId)
-        ) {
-            return null;
-        }
-
-        return (int) $userId;
     }
+
+    if ($authorizationHeader === '') {
+        throw new Exception(
+            'Authorization token is required.'
+        );
+    }
+
+    if (!preg_match(
+        '/^Bearer\s+(.+)$/i',
+        trim($authorizationHeader),
+        $matches
+    )) {
+        throw new Exception(
+            'Invalid authorization header.'
+        );
+    }
+
+    $token = trim($matches[1]);
+
+    $payload = JwtHelper::decode($token);
+
+    if ($payload === null) {
+        throw new Exception(
+            'Invalid or expired token.'
+        );
+    }
+
+    if (!isset($payload['sub'])) {
+        throw new Exception(
+            'Invalid token payload.'
+        );
+    }
+
+    return (int) $payload['sub'];
+}
 
     //Create  Barber profile
 

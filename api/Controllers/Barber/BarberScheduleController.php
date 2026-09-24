@@ -24,13 +24,17 @@ class BarberScheduleController
     }
 
 
-      //Get the authenticated barber's schedule
+    //Get the authenticated barber's schedule.
     public function getMySchedule(): void
     {
+        header('Content-Type: application/json; charset=UTF-8');
+
         try {
             $userId = $this->getAuthenticatedUserId();
 
-            $schedules = $this->scheduleService->getMySchedule($userId);
+            $schedules = $this->scheduleService->getMySchedule(
+                $userId
+            );
 
             http_response_code(200);
 
@@ -48,9 +52,12 @@ class BarberScheduleController
         }
     }
 
-     //Create a schedule for the authenticated barber
+
+     //Create a schedule for the authenticated barber.
     public function create(): void
     {
+        header('Content-Type: application/json; charset=UTF-8');
+
         try {
             $userId = $this->getAuthenticatedUserId();
 
@@ -60,7 +67,9 @@ class BarberScheduleController
             );
 
             if (!is_array($data)) {
-                throw new Exception('Invalid request data.');
+                throw new Exception(
+                    'Invalid request data.'
+                );
             }
 
             $this->scheduleService->create(
@@ -72,7 +81,8 @@ class BarberScheduleController
 
             echo json_encode([
                 'status' => 'success',
-                'message' => 'Barber schedule created successfully.',
+                'message' =>
+                    'Barber schedule created successfully.',
             ]);
         } catch (Exception $e) {
             http_response_code(400);
@@ -84,25 +94,110 @@ class BarberScheduleController
         }
     }
 
-      //Get authenticated user ID from JWT
+
+    //Update a schedule belonging to the authenticated barber.
+    public function update(int $scheduleId): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        try {
+            $userId = $this->getAuthenticatedUserId();
+
+            $data = json_decode(
+                file_get_contents('php://input'),
+                true
+            );
+
+            if (!is_array($data)) {
+                throw new Exception(
+                    'Invalid request data.'
+                );
+            }
+
+            $this->scheduleService->update(
+                $userId,
+                $scheduleId,
+                $data
+            );
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' =>
+                    'Barber schedule updated successfully.',
+            ]);
+        } catch (Exception $e) {
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+            ]);
+        }
+    }
+
+
+     //Delete a schedule belonging to the authenticated barber.
+    public function delete(int $scheduleId): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        try {
+            $userId = $this->getAuthenticatedUserId();
+
+            $this->scheduleService->delete(
+                $userId,
+                $scheduleId
+            );
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' =>
+                    'Barber schedule deleted successfully.',
+            ]);
+        } catch (Exception $e) {
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+            ]);
+        }
+    }
+
+
+     //Get authenticated user ID from JWT.
     private function getAuthenticatedUserId(): int
     {
-        $headers = getallheaders();
+        $authorizationHeader =
+            $_SERVER['HTTP_AUTHORIZATION']
+            ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+            ?? '';
 
-        $authHeader =
-            $headers['Authorization']
-            ?? $headers['authorization']
-            ?? null;
+        if (
+            $authorizationHeader === ''
+            && function_exists('getallheaders')
+        ) {
+            $headers = getallheaders();
 
-        if (!$authHeader) {
+            $authorizationHeader =
+                $headers['Authorization']
+                ?? $headers['authorization']
+                ?? '';
+        }
+
+        if ($authorizationHeader === '') {
             throw new Exception(
                 'Authorization token is required.'
             );
         }
 
         if (!preg_match(
-            '/Bearer\s+(.+)/i',
-            $authHeader,
+            '/^Bearer\s+(.+)$/i',
+            trim($authorizationHeader),
             $matches
         )) {
             throw new Exception(
@@ -114,12 +209,18 @@ class BarberScheduleController
 
         $payload = JwtHelper::decode($token);
 
-        if (!$payload || !isset($payload['sub'])) {
+        if ($payload === null) {
             throw new Exception(
                 'Invalid or expired token.'
             );
         }
 
-        return (int) $payload['sub'];
+        if (!isset($payload['user_id'])) {
+            throw new Exception(
+                'Invalid token payload.'
+            );
+        }
+
+        return (int) $payload['user_id'];
     }
 }

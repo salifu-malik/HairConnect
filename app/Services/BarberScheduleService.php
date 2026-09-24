@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Barber;
 use App\Repositories\BarberRepository;
 use App\Repositories\BarberScheduleRepository;
 use Exception;
@@ -19,47 +20,48 @@ class BarberScheduleService
         $this->barberRepository = $barberRepository;
     }
 
-    /**
-     * Get the authenticated barber's schedules.
-     */
+
+     //Get the authenticated barber's schedules.
     public function getMySchedule(int $userId): array
     {
         $barber = $this->getActiveBarber($userId);
 
-        return $this->scheduleRepository->findByBarber($barber['id']);
+        return $this->scheduleRepository->findByBarber(
+            $barber->id
+        );
     }
 
-    /**
-     * Create a schedule for the authenticated barber.
-     */
+
+     //Create a schedule for the authenticated barber.
     public function create(int $userId, array $data): bool
     {
         $barber = $this->getActiveBarber($userId);
 
-        $day = trim($data['day'] ?? '');
-        $serviceLocation = strtoupper(trim($data['service_location'] ?? ''));
-        $startTime = trim($data['start_time'] ?? '');
-        $endTime = trim($data['end_time'] ?? '');
+        $day = trim((string) ($data['day'] ?? ''));
+        $serviceLocation = strtoupper(
+            trim((string) ($data['service_location'] ?? ''))
+        );
+        $startTime = trim((string) ($data['start_time'] ?? ''));
+        $endTime = trim((string) ($data['end_time'] ?? ''));
 
-        $this->validateDay($day);
-        $this->validateServiceLocation($serviceLocation);
-        $this->validateTimes($startTime, $endTime);
+        $this->validateScheduleData(
+            $day,
+            $serviceLocation,
+            $startTime,
+            $endTime
+        );
+
+        $this->validateServiceLocationForBarber(
+            $barber,
+            $serviceLocation
+        );
 
         /*
-         * Prevent an independent barber from creating a SHOP schedule.
-         */
-        if ($serviceLocation === 'SHOP' && $barber['shop_id'] === null) {
-            throw new Exception(
-                'Independent barbers cannot create a SHOP schedule.'
-            );
-        }
-
-        /*
-         * Prevent duplicate schedules for the same
+         * Prevent duplicate schedules for:
          * barber + day + service location.
          */
         $existing = $this->scheduleRepository->findByBarberAndDay(
-            (int) $barber['id'],
+            $barber->id,
             $day,
             $serviceLocation
         );
@@ -71,7 +73,7 @@ class BarberScheduleService
         }
 
         return $this->scheduleRepository->create([
-            'barber_id' => (int) $barber['id'],
+            'barber_id' => $barber->id,
             'day' => $day,
             'service_location' => $serviceLocation,
             'start_time' => $startTime,
@@ -79,10 +81,120 @@ class BarberScheduleService
         ]);
     }
 
-    /**
-     * Get the authenticated and active barber.
-     */
-    private function getActiveBarber(int $userId): array
+
+     //Update a schedule belonging to the authenticated barber.
+    public function update(
+        int $userId,
+        int $scheduleId,
+        array $data
+    ): bool {
+        $barber = $this->getActiveBarber($userId);
+
+        $schedule = $this->scheduleRepository->findById(
+            $scheduleId
+        );
+
+        if (!$schedule) {
+            throw new Exception(
+                'Schedule not found.'
+            );
+        }
+
+        /*
+         * Make sure the authenticated barber owns
+         * this schedule.
+         */
+        if ((int) $schedule['barber_id'] !== $barber->id) {
+            throw new Exception(
+                'You are not authorized to update this schedule.'
+            );
+        }
+
+        $day = trim((string) ($data['day'] ?? ''));
+        $serviceLocation = strtoupper(
+            trim((string) ($data['service_location'] ?? ''))
+        );
+        $startTime = trim((string) ($data['start_time'] ?? ''));
+        $endTime = trim((string) ($data['end_time'] ?? ''));
+
+        $this->validateScheduleData(
+            $day,
+            $serviceLocation,
+            $startTime,
+            $endTime
+        );
+
+        $this->validateServiceLocationForBarber(
+            $barber,
+            $serviceLocation
+        );
+
+        /*
+         * Check whether another schedule belonging to
+         * this barber already uses the new day/location.
+         */
+        $existing = $this->scheduleRepository->findByBarberAndDay(
+            $barber->id,
+            $day,
+            $serviceLocation
+        );
+
+        if (
+            $existing
+            && (int) $existing['id'] !== $scheduleId
+        ) {
+            throw new Exception(
+                "A {$serviceLocation} schedule already exists for {$day}."
+            );
+        }
+
+        return $this->scheduleRepository->update(
+            $scheduleId,
+            [
+                'day' => $day,
+                'service_location' => $serviceLocation,
+                'start_time' => $startTime,
+                'end_time' => $endTime,
+            ]
+        );
+    }
+
+
+     //Delete a schedule belonging to the authenticated barber.
+    public function delete(
+        int $userId,
+        int $scheduleId
+    ): bool {
+        $barber = $this->getActiveBarber($userId);
+
+        $schedule = $this->scheduleRepository->findById(
+            $scheduleId
+        );
+
+        if (!$schedule) {
+            throw new Exception(
+                'Schedule not found.'
+            );
+        }
+
+        /*
+         * Make sure the authenticated barber owns
+         * this schedule.
+         */
+        if ((int) $schedule['barber_id'] !== $barber->id) {
+            throw new Exception(
+                'You are not authorized to delete this schedule.'
+            );
+        }
+
+        return $this->scheduleRepository->delete(
+            $scheduleId
+        );
+    }
+
+
+     //Get the authenticated and active barber.
+    private function getActiveBarber(int $userId): Barber
     {
         $barber = $this->barberRepository->findByUserId($userId);
 
@@ -92,13 +204,13 @@ class BarberScheduleService
             );
         }
 
-        if (($barber['approval_status'] ?? '') !== 'approved') {
+        if ($barber->approvalStatus !== 'approved') {
             throw new Exception(
                 'Your barber profile has not been approved.'
             );
         }
 
-        if (($barber['status'] ?? '') !== 'active') {
+        if ($barber->status !== 'active') {
             throw new Exception(
                 'Your barber profile is not active.'
             );
@@ -107,9 +219,42 @@ class BarberScheduleService
         return $barber;
     }
 
-    /**
-     * Validate the day.
-     */
+
+     //Validate schedule data.
+    private function validateScheduleData(
+        string $day,
+        string $serviceLocation,
+        string $startTime,
+        string $endTime
+    ): void {
+        $this->validateDay($day);
+        $this->validateServiceLocation($serviceLocation);
+        $this->validateTimes($startTime, $endTime);
+    }
+
+
+     //Validate service location against barber type.
+    private function validateServiceLocationForBarber(
+        Barber $barber,
+        string $serviceLocation
+    ): void {
+        /*
+         * Independent barbers do not have a shop.
+         * Therefore they cannot create or update
+         * a schedule to SHOP.
+         */
+        if (
+            $serviceLocation === 'SHOP'
+            && $barber->shopId === null
+        ) {
+            throw new Exception(
+                'Independent barbers cannot use SHOP schedules.'
+            );
+        }
+    }
+
+
+     //Validate the day.
     private function validateDay(string $day): void
     {
         $validDays = [
@@ -129,11 +274,11 @@ class BarberScheduleService
         }
     }
 
-    /**
-     * Validate service location.
-     */
-    private function validateServiceLocation(string $serviceLocation): void
-    {
+
+    //Validate service location.
+    private function validateServiceLocation(
+        string $serviceLocation
+    ): void {
         $validLocations = [
             'SHOP',
             'HOME',
@@ -146,9 +291,8 @@ class BarberScheduleService
         }
     }
 
-    /**
-     * Validate start and end times.
-     */
+
+     //Validate start and end times.
     private function validateTimes(
         string $startTime,
         string $endTime
@@ -172,9 +316,8 @@ class BarberScheduleService
         }
     }
 
-    /**
-     * Validate HH:MM time format.
-     */
+
+     //Validate HH:MM time format.
     private function isValidTime(string $time): bool
     {
         return preg_match(

@@ -35,6 +35,7 @@ use Api\Controllers\BookingController;
 use Api\Controllers\StoreController;
 use Api\Controllers\ProfileController;
 use Api\Controllers\Barber\BarberController;
+use Api\Controllers\Barber\BarberScheduleController;
 use Api\Controllers\Barber\HomeServiceController;
 use Api\Controllers\ShopOwner\ShopController;
 use App\Helpers\DatabaseManager;
@@ -126,6 +127,18 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     && $requestMethod === 'POST'
 ) {
     (new BarberScheduleController())->create();
+
+} elseif (
+    preg_match('#^/api/barber/schedule/([0-9]+)$#', $requestUri, $matches)
+    && $requestMethod === 'PUT'
+) {
+    (new BarberScheduleController())->update((int) $matches[1]);
+
+} elseif (
+    preg_match('#^/api/barber/schedule/([0-9]+)$#', $requestUri, $matches)
+    && $requestMethod === 'DELETE'
+) {
+    (new BarberScheduleController())->delete((int) $matches[1]);
 
     // BARBER HOME SERVICE ROUTES
 } elseif (
