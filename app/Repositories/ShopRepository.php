@@ -4,16 +4,29 @@ namespace App\Repositories;
 
 use App\Models\Shop;
 use App\Helpers\DatabaseManager;
+use App\Helpers\RedisManager;
 use PDO;
 
 class ShopRepository
 {
     private PDO $db;
+    private RedisManager $redis;
 
     public function __construct()
     {
         $this->db = DatabaseManager::getConnection('booking_db');
+        $this->redis = new RedisManager();
     }
+
+
+    /**
+     * Invalidate the public barber discovery cache.
+     */
+    private function invalidateBarberDiscoveryCache(): void
+    {
+        $this->redis->delete('barbers:discoverable');
+    }
+
 
     /**
      * Create a new shop.
@@ -138,38 +151,50 @@ class ShopRepository
     ): bool {
         if ($approvalStatus === 'approved') {
             $stmt = $this->db->prepare("
-                UPDATE shops
-                SET
-                    approval_status = 'approved',
-                    status = 'active',
-                    approved_at = CURRENT_TIMESTAMP,
-                    approved_by = :approved_by,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
-            ");
+            UPDATE shops
+            SET
+                approval_status = 'approved',
+                status = 'active',
+                approved_at = CURRENT_TIMESTAMP,
+                approved_by = :approved_by,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+        ");
 
-            return $stmt->execute([
+            $result = $stmt->execute([
                 'id' => $shopId,
                 'approved_by' => $approvedBy,
             ]);
+
+            if ($result && $stmt->rowCount() > 0) {
+                $this->invalidateBarberDiscoveryCache();
+            }
+
+            return $result;
         }
 
         if ($approvalStatus === 'rejected') {
             $stmt = $this->db->prepare("
-                UPDATE shops
-                SET
-                    approval_status = 'rejected',
-                    status = 'inactive',
-                    approved_at = NULL,
-                    approved_by = :approved_by,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
-            ");
+            UPDATE shops
+            SET
+                approval_status = 'rejected',
+                status = 'inactive',
+                approved_at = NULL,
+                approved_by = :approved_by,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+        ");
 
-            return $stmt->execute([
+            $result = $stmt->execute([
                 'id' => $shopId,
                 'approved_by' => $approvedBy,
             ]);
+
+            if ($result && $stmt->rowCount() > 0) {
+                $this->invalidateBarberDiscoveryCache();
+            }
+
+            return $result;
         }
 
         throw new \InvalidArgumentException(

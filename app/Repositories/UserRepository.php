@@ -151,4 +151,22 @@ class UserRepository {
             'id' => $userId
         ]);
     }
+
+    public function updateProfileImage(
+        int $userId,
+        string $profileImage
+    ): void {
+        $stmt = $this->db->prepare("
+        UPDATE users
+        SET profile_image = :profile_image
+        WHERE id = :id
+    ");
+
+        $stmt->execute([
+            'profile_image' => $profileImage,
+            'id' => $userId
+        ]);
+    }
 }
+
+

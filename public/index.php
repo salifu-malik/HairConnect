@@ -35,7 +35,7 @@ use Api\Controllers\Auth\AuthController;
 use Api\Controllers\Booking\BarberServiceController;
 //use Api\Controllers\BookingController;
 use Api\Controllers\StoreController;
-use Api\Controllers\ProfileController;
+use Api\Controllers\Profile\ProfileController;
 use Api\Controllers\Barber\BarberController;
 use Api\Controllers\Barber\BarberDiscoveryController;
 use Api\Controllers\Barber\BarberScheduleController;
@@ -61,8 +61,6 @@ $requestMethod = $_SERVER['REQUEST_METHOD'];
 
 
 //AUTH ROUTES
-
-
 if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
     (new AuthController())->register();
@@ -99,6 +97,10 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
     (new ProfileController())->updateProfile();
 
+} elseif ($requestUri === '/api/profile/image' && $requestMethod === 'POST') {
+
+    (new ProfileController())->uploadProfileImage();
+
 } elseif ($requestUri === '/api/profile/change-password' && $requestMethod === 'POST') {
     (new ProfileController())->changePassword();
 } elseif ($requestUri === '/api/shops' && $requestMethod === 'POST') {
@@ -110,7 +112,6 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
 
 // BARBER ROUTES
-
 } elseif ($requestUri === '/api/barber/profile' && $requestMethod === 'POST') {
     (new BarberController())->createProfile();
 
@@ -118,7 +119,6 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     (new BarberController())->applyToShop();
 
     // BARBER SCHEDULE ROUTES
-
 } elseif (
     $requestUri === '/api/barber/schedule'
     && $requestMethod === 'GET'
@@ -182,7 +182,6 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
 
 // SHOP OWNER BARBER ROUTES
-
 } elseif ($requestUri === '/api/shop-owner/barbers' && $requestMethod === 'GET') {
     (new BarberController())->getMyBarbers();
 } elseif (
@@ -264,7 +263,6 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
 
     //404
-
 } else {
 
     http_response_code(404);

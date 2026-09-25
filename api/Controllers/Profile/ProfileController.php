@@ -1,9 +1,12 @@
 <?php
 
 
+namespace Api\Controllers\Profile;
+
 use App\Helpers\JwtHelper;
 use App\Repositories\SessionRepository;
 use App\Repositories\UserRepository;
+use App\Services\CloudinaryService;
 
 class ProfileController
 {
@@ -234,6 +237,145 @@ class ProfileController
             echo json_encode([
                 'status' => 'error',
                 'message' => 'Unable to update profile.'
+            ]);
+        }
+    }
+
+
+
+     //POST /api/profile/image
+    public function uploadProfileImage(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        try {
+            $userId = $this->getAuthenticatedUserId();
+
+            if ($userId === null) {
+                http_response_code(401);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid or missing authorization token.'
+                ]);
+
+                return;
+            }
+
+            if (
+                !isset($_FILES['image']) ||
+                !is_array($_FILES['image'])
+            ) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Profile image is required.'
+                ]);
+
+                return;
+            }
+
+            $file = $_FILES['image'];
+
+            if ($file['error'] !== UPLOAD_ERR_OK) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Image upload failed.'
+                ]);
+
+                return;
+            }
+
+            $maxFileSize = 5 * 1024 * 1024;
+
+            if ($file['size'] > $maxFileSize) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Profile image must not exceed 5 MB.'
+                ]);
+
+                return;
+            }
+
+            $allowedMimeTypes = [
+                'image/jpeg',
+                'image/png',
+                'image/webp'
+            ];
+
+            $finfo = new \finfo(FILEINFO_MIME_TYPE);
+            $mimeType = $finfo->file($file['tmp_name']);
+
+            if (!in_array($mimeType, $allowedMimeTypes, true)) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Only JPG, PNG, and WEBP images are allowed.'
+                ]);
+
+                return;
+            }
+
+            if (
+                !is_uploaded_file($file['tmp_name'])
+            ) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid uploaded file.'
+                ]);
+
+                return;
+            }
+
+            $cloudinaryService = new CloudinaryService();
+
+            $imageUrl = $cloudinaryService->uploadImage(
+                $file['tmp_name'],
+                'hairconnect/profile-images'
+            );
+
+            $this->userRepository->updateProfileImage(
+                $userId,
+                $imageUrl
+            );
+
+            $user = $this->userRepository->findById($userId);
+
+            if ($user === null) {
+                http_response_code(404);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'User not found.'
+                ]);
+
+                return;
+            }
+
+            $user->roles = $this->userRepository->getRoles($userId);
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'Profile image uploaded successfully.',
+                'data' => $user
+            ]);
+
+        } catch (\Throwable $e) {
+            http_response_code(500);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Unable to upload profile image.'
             ]);
         }
     }

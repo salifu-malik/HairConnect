@@ -4,15 +4,25 @@ namespace App\Repositories;
 
 use App\Models\Barber;
 use App\Helpers\DatabaseManager;
+use App\Helpers\RedisManager;
 use PDO;
 
 class BarberRepository
 {
     private PDO $db;
+    private RedisManager $redis;
 
     public function __construct()
     {
         $this->db = DatabaseManager::getConnection('booking_db');
+        $this->redis = new RedisManager();
+    }
+
+
+     //Invalidate the public barber discovery cache.
+    private function invalidateDiscoveryCache(): void
+    {
+        $this->redis->delete('barbers:discoverable');
     }
 
     /**
@@ -48,7 +58,11 @@ class BarberRepository
             'speciality' => $data['speciality'] ?? null,
         ]);
 
-        return (int) $this->db->lastInsertId();
+        $barberId = (int) $this->db->lastInsertId();
+
+        $this->invalidateDiscoveryCache();
+
+        return $barberId;
     }
 
     /**
@@ -84,32 +98,42 @@ class BarberRepository
             'speciality' => $data['speciality'] ?? null,
         ]);
 
-        return (int) $this->db->lastInsertId();
+        $barberId = (int) $this->db->lastInsertId();
+
+        $this->invalidateDiscoveryCache();
+
+        return $barberId;
     }
 
-    //Applying to  a shop
 
+    //Apply an independent barber to a shop.
     public function applyToShop(
         int $barberId,
         int $shopId
     ): bool {
         $stmt = $this->db->prepare("
-        UPDATE barbers
-        SET
-            shop_id = :shop_id,
-            approval_status = 'pending',
-            status = 'inactive',
-            approved_at = NULL,
-            approved_by = NULL,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = :id
-          AND shop_id IS NULL
-    ");
+            UPDATE barbers
+            SET
+                shop_id = :shop_id,
+                approval_status = 'pending',
+                status = 'inactive',
+                approved_at = NULL,
+                approved_by = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+              AND shop_id IS NULL
+        ");
 
-        return $stmt->execute([
+        $result = $stmt->execute([
             'id' => $barberId,
             'shop_id' => $shopId,
         ]);
+
+        if ($result && $stmt->rowCount() > 0) {
+            $this->invalidateDiscoveryCache();
+        }
+
+        return $result;
     }
 
     public function findById(int $id): ?Barber
@@ -170,9 +194,16 @@ class BarberRepository
         return $barbers;
     }
 
-
     /**
-     * Find all approved and active barbers.
+     * Find all approved and active barbers that customers can discover.
+     *
+     * Independent barbers:
+     * - shop_id IS NULL
+     * - must be approved and active
+     *
+     * Shop-assigned barbers:
+     * - must belong to an approved and active shop
+     * - must also be approved and active themselves
      *
      * Optional search can match barber speciality.
      */
@@ -180,24 +211,33 @@ class BarberRepository
         ?string $search = null
     ): array {
         $sql = "
-        SELECT *
-        FROM barbers
-        WHERE approval_status = 'approved'
-          AND status = 'active'
+        SELECT b.*
+        FROM barbers b
+        LEFT JOIN shops s
+            ON s.id = b.shop_id
+        WHERE b.approval_status = 'approved'
+          AND b.status = 'active'
+          AND (
+                b.shop_id IS NULL
+                OR (
+                    s.approval_status = 'approved'
+                    AND s.status = 'active'
+                )
+          )
     ";
 
         $params = [];
 
         if ($search !== null && trim($search) !== '') {
             $sql .= "
-            AND speciality LIKE :search
+            AND b.speciality LIKE :search
         ";
 
             $params['search'] = '%' . trim($search) . '%';
         }
 
         $sql .= "
-        ORDER BY created_at DESC
+        ORDER BY b.created_at DESC
     ";
 
         $stmt = $this->db->prepare($sql);
@@ -214,6 +254,7 @@ class BarberRepository
     }
 
 
+     //Update barber approval status.
     public function updateApprovalStatus(
         int $barberId,
         string $approvalStatus,
@@ -231,10 +272,16 @@ class BarberRepository
                 WHERE id = :id
             ");
 
-            return $stmt->execute([
+            $result = $stmt->execute([
                 'id' => $barberId,
                 'approved_by' => $approvedBy
             ]);
+
+            if ($result && $stmt->rowCount() > 0) {
+                $this->invalidateDiscoveryCache();
+            }
+
+            return $result;
         }
 
         if ($approvalStatus === 'rejected') {
@@ -249,10 +296,16 @@ class BarberRepository
                 WHERE id = :id
             ");
 
-            return $stmt->execute([
+            $result = $stmt->execute([
                 'id' => $barberId,
                 'approved_by' => $approvedBy
             ]);
+
+            if ($result && $stmt->rowCount() > 0) {
+                $this->invalidateDiscoveryCache();
+            }
+
+            return $result;
         }
 
         throw new \InvalidArgumentException(
