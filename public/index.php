@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+namespace Api\Controllers\Booking;
 
 ini_set('display_errors', '1');
 ini_set('display_startup_errors', '1');
@@ -31,10 +32,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 require_once __DIR__ . '/../bootstrap.php';
 
 use Api\Controllers\Auth\AuthController;
-use Api\Controllers\BookingController;
+use Api\Controllers\Booking\BarberServiceController;
+//use Api\Controllers\BookingController;
 use Api\Controllers\StoreController;
 use Api\Controllers\ProfileController;
 use Api\Controllers\Barber\BarberController;
+use Api\Controllers\Barber\BarberDiscoveryController;
 use Api\Controllers\Barber\BarberScheduleController;
 use Api\Controllers\Barber\HomeServiceController;
 use Api\Controllers\ShopOwner\ShopController;
@@ -196,10 +199,45 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
 
 
+
+
+    // BARBER DISCOVERY ROUTE
+} elseif (
+    $requestUri === '/api/barbers'
+    && $requestMethod === 'GET'
+) {
+    (new BarberDiscoveryController())->getBarbers();
+
+
+// BARBER PUBLIC SERVICE ROUTES
+} elseif (
+    preg_match(
+        '#^/api/barbers/([0-9]+)/shop-services$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'GET'
+) {
+    (new BarberServiceController())->getShopServices(
+        (int) $matches[1]
+    );
+
+} elseif (
+    preg_match(
+        '#^/api/barbers/([0-9]+)/home-services$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'GET'
+) {
+    (new BarberServiceController())->getHomeServices(
+        (int) $matches[1]
+    );
+
+
     //BOOKING ROUTES
 } elseif ($requestUri === '/api/bookings' && $requestMethod === 'POST') {
     (new BookingController())->bookAppointment();
-
 
     //STORE ROUTES
 } elseif ($requestUri === '/api/products' && $requestMethod === 'GET') {

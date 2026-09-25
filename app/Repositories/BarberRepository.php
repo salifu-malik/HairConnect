@@ -170,6 +170,50 @@ class BarberRepository
         return $barbers;
     }
 
+
+    /**
+     * Find all approved and active barbers.
+     *
+     * Optional search can match barber speciality.
+     */
+    public function findDiscoverableBarbers(
+        ?string $search = null
+    ): array {
+        $sql = "
+        SELECT *
+        FROM barbers
+        WHERE approval_status = 'approved'
+          AND status = 'active'
+    ";
+
+        $params = [];
+
+        if ($search !== null && trim($search) !== '') {
+            $sql .= "
+            AND speciality LIKE :search
+        ";
+
+            $params['search'] = '%' . trim($search) . '%';
+        }
+
+        $sql .= "
+        ORDER BY created_at DESC
+    ";
+
+        $stmt = $this->db->prepare($sql);
+
+        $stmt->execute($params);
+
+        $barbers = [];
+
+        foreach ($stmt->fetchAll() as $data) {
+            $barbers[] = new Barber($data);
+        }
+
+        return $barbers;
+    }
+
+
     public function updateApprovalStatus(
         int $barberId,
         string $approvalStatus,

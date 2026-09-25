@@ -63,4 +63,43 @@ class ServiceRepository
 
         return $data ? new Service($data) : null;
     }
+
+    /**
+     * Get active shop services available to a specific barber.
+     *
+     * A service is available when:
+     * - it belongs to the barber's shop
+     * - it is active
+     * - it is either assigned to this barber specifically
+     *   or available to all barbers in the shop
+     */
+    public function findActiveByShopAndBarber(
+        int $shopId,
+        int $barberId
+    ): array {
+        $stmt = $this->db->prepare("
+            SELECT *
+            FROM services
+            WHERE shop_id = :shop_id
+              AND status = 'active'
+              AND (
+                  barber_id IS NULL
+                  OR barber_id = :barber_id
+              )
+            ORDER BY name ASC
+        ");
+
+        $stmt->execute([
+            'shop_id' => $shopId,
+            'barber_id' => $barberId,
+        ]);
+
+        $services = [];
+
+        foreach ($stmt->fetchAll() as $data) {
+            $services[] = new Service($data);
+        }
+
+        return $services;
+    }
 }

@@ -391,7 +391,9 @@ class BookingService
 
              //HOME appointments do not require a shop.
 
-            'shop_id' => $shop?->id,
+            'shop_id' => $serviceLocation === 'SHOP'
+                ? $shop?->id
+                : null,
 
             'barber_id' => $barber->id,
 

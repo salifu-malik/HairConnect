@@ -13,5 +13,6 @@ spl_autoload_register(function ($class) {
     }
 });
 
-Env::load(__DIR__ . '/.env');
 require_once __DIR__ . '/vendor/autoload.php';
+
+Env::load(__DIR__ . '/.env');

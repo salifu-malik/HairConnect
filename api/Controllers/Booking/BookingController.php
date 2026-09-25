@@ -1,6 +1,8 @@
 <?php
 
 
+namespace Api\Controllers\Booking;
+
 use App\Helpers\JwtHelper;
 use App\Repositories\AppointmentRepository;
 use App\Repositories\BarberRepository;
@@ -20,9 +22,9 @@ class BookingController
             new ShopRepository(),
             new BarberRepository(),
             new ServiceRepository(),
+            new BarberHomeServiceRepository(),
             new AppointmentRepository(),
-            new BarberScheduleRepository(),
-            new BarberHomeServiceRepository()
+            new BarberScheduleRepository()
         );
     }
 
@@ -30,13 +32,9 @@ class BookingController
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        /*
-         * ---------------------------------------------------------
-         * Get authenticated customer from JWT
-         * ---------------------------------------------------------
-         */
 
-        $customerId = $this->getAuthenticatedUserId();
+         //Get authenticated customer from JWT
+       $customerId = $this->getAuthenticatedUserId();
 
         if ($customerId === null) {
             http_response_code(401);
@@ -49,12 +47,8 @@ class BookingController
             return;
         }
 
-        /*
-         * ---------------------------------------------------------
-         * Read request body
-         * ---------------------------------------------------------
-         */
 
+         //Read request body
         $data = json_decode(
             file_get_contents('php://input'),
             true
@@ -95,9 +89,8 @@ class BookingController
         }
     }
 
-    /**
-     * Extract authenticated user ID from JWT.
-     */
+
+     //Extract authenticated user ID from JWT.
     private function getAuthenticatedUserId(): ?int
     {
         $authorizationHeader =
