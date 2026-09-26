@@ -156,30 +156,82 @@ class PlanVersionRepository
     public function updateApprovalStatus(
         int $planVersionId,
         string $status,
-        int $adminId,
+        int $approvedBy,
         ?string $rejectionReason = null
     ): bool {
-        $stmt = $this->db->prepare("
+        try {
+            $this->db->beginTransaction();
+
+            // If approving this pricing version,
+            // deactivate any previously approved version
+            // for the same plan.
+            if ($status === 'approved') {
+                $stmt = $this->db->prepare("
+                SELECT plan_id
+                FROM plan_versions
+                WHERE id = :id
+                LIMIT 1
+            ");
+
+                $stmt->execute([
+                    'id' => $planVersionId
+                ]);
+
+                $planId = $stmt->fetchColumn();
+
+                if (!$planId) {
+                    $this->db->rollBack();
+                    return false;
+                }
+
+                $stmt = $this->db->prepare("
+                UPDATE plan_versions
+                SET status = 'inactive'
+                WHERE plan_id = :plan_id
+                  AND status = 'approved'
+                  AND id != :id
+            ");
+
+                $stmt->execute([
+                    'plan_id' => $planId,
+                    'id' => $planVersionId
+                ]);
+            }
+
+            $stmt = $this->db->prepare("
             UPDATE plan_versions
             SET
                 status = :status,
                 approved_by = :approved_by,
-                approved_at = CASE
-                    WHEN :status = 'approved'
-                    THEN CURRENT_TIMESTAMP
-                    ELSE NULL
-                END,
+                approved_at = CURRENT_TIMESTAMP,
                 rejection_reason = :rejection_reason
             WHERE id = :id
               AND status = 'pending'
         ");
 
-        return $stmt->execute([
-            'status' => $status,
-            'approved_by' => $adminId,
-            'rejection_reason' => $rejectionReason,
-            'id' => $planVersionId
-        ]);
+            $result = $stmt->execute([
+                'status' => $status,
+                'approved_by' => $approvedBy,
+                'rejection_reason' => $rejectionReason,
+                'id' => $planVersionId
+            ]);
+
+            if (!$result || $stmt->rowCount() === 0) {
+                $this->db->rollBack();
+                return false;
+            }
+
+            $this->db->commit();
+
+            return true;
+
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $e;
+        }
     }
 
     public function findAll(): array
