@@ -1,5 +1,6 @@
 <?php
 
+date_default_timezone_set('Africa/Accra');
 use App\Helpers\Env;
 
 spl_autoload_register(function ($class) {

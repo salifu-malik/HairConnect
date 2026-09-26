@@ -39,7 +39,7 @@ class SubscriptionRepository
                 :plan_version_id,
                 :start_date,
                 :end_date,
-                'active'
+                'pending'
             )
         ");
 
@@ -95,6 +95,30 @@ class SubscriptionRepository
             ORDER BY end_date DESC
             LIMIT 1
         ");
+
+        $stmt->execute([
+            'user_id' => $userId
+        ]);
+
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$data) {
+            return null;
+        }
+
+        return new Subscription($data);
+    }
+
+    public function findPendingByUserId(int $userId): ?Subscription
+    {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM subscriptions
+        WHERE user_id = :user_id
+          AND status = 'pending'
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    ");
 
         $stmt->execute([
             'user_id' => $userId
