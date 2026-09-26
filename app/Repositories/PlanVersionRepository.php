@@ -101,6 +101,33 @@ class PlanVersionRepository
         return $versions;
     }
 
+    //To prevent runtime when Finance Manager submits pricing proposal
+    public function findPendingByPlanId(
+        int $planId
+    ): ?PlanVersion {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM plan_versions
+        WHERE plan_id = :plan_id
+          AND status = 'pending'
+        ORDER BY proposed_at DESC, id DESC
+        LIMIT 1
+    ");
+
+        $stmt->execute([
+            'plan_id' => $planId
+        ]);
+
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$data) {
+            return null;
+        }
+
+        return new PlanVersion($data);
+    }
+
+
     public function findApprovedByPlanId(
         int $planId
     ): ?PlanVersion {
