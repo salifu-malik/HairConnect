@@ -19,9 +19,8 @@ class AdminService
         $this->userRepository = $userRepository;
     }
 
-    /**
-     * Make sure the authenticated user is an ADMIN.
-     */
+
+     //Make sure the authenticated user is an ADMIN.
     public function validateAdmin(int $adminId): void
     {
         $user = $this->userRepository->findById($adminId);
@@ -37,9 +36,8 @@ class AdminService
         }
     }
 
-    /**
-     * Get all shops waiting for admin approval.
-     */
+
+     //Get all shops waiting for admin approval.
     public function getPendingShops(int $adminId): array
     {
         $this->validateAdmin($adminId);
@@ -47,9 +45,8 @@ class AdminService
         return $this->shopRepository->findPendingShops();
     }
 
-    /**
-     * Approve or reject a shop.
-     */
+
+     //Approve or reject a shop.
     public function updateShopApproval(
         int $adminId,
         int $shopId,
