@@ -101,7 +101,7 @@ class PlanVersionRepository
         return $versions;
     }
 
-    //To prevent runtime when Finance Manager submits pricing proposal
+    //To prevent runtime error when Finance Manager submits pricing proposal
     public function findPendingByPlanId(
         int $planId
     ): ?PlanVersion {
