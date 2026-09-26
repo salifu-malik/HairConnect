@@ -253,4 +253,29 @@ class PlanVersionRepository
 
         return $versions;
     }
+
+    //Active pricing lookup
+    public function findApprovedByPlanId(int $planId): ?PlanVersion
+    {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM plan_versions
+        WHERE plan_id = :plan_id
+          AND status = 'approved'
+        ORDER BY approved_at DESC, id DESC
+        LIMIT 1
+    ");
+
+        $stmt->execute([
+            'plan_id' => $planId
+        ]);
+
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$data) {
+            return null;
+        }
+
+        return new PlanVersion($data);
+    }
 }
