@@ -462,4 +462,121 @@ class SubscriptionController
         }
     }
 
+
+    /**
+     * Create a new subscription pricing proposal.
+     *
+     * Only Finance Managers can create pricing proposals.
+     *
+     * Expected JSON:
+     * {
+     *     "plan_id": 1,
+     *     "monthly_price": 120.00,
+     *     "yearly_discount_percent": 10
+     * }
+     */
+    public function proposePricing(): void
+    {
+        header('Content-Type: application/json');
+
+        try {
+            $financeManagerId = $this->getAuthenticatedUserId();
+
+            $input = json_decode(
+                file_get_contents('php://input'),
+                true
+            );
+
+            if (!is_array($input)) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Invalid request body.'
+                ]);
+
+                return;
+            }
+
+            $planId = isset($input['plan_id'])
+                ? (int) $input['plan_id']
+                : 0;
+
+            $monthlyPrice = isset($input['monthly_price'])
+                ? (float) $input['monthly_price']
+                : 0;
+
+            $yearlyDiscountPercent =
+                isset($input['yearly_discount_percent'])
+                    ? (float) $input['yearly_discount_percent']
+                    : 0;
+
+            if ($planId <= 0) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'plan_id is required.'
+                ]);
+
+                return;
+            }
+
+            if ($monthlyPrice <= 0) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' =>
+                        'monthly_price must be greater than zero.'
+                ]);
+
+                return;
+            }
+
+            if (
+                $yearlyDiscountPercent < 0 ||
+                $yearlyDiscountPercent > 100
+            ) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' =>
+                        'yearly_discount_percent must be between 0 and 100.'
+                ]);
+
+                return;
+            }
+
+            $versionId = $this->subscriptionService
+                ->proposePricing(
+                    $financeManagerId,
+                    $planId,
+                    $monthlyPrice,
+                    $yearlyDiscountPercent
+                );
+
+            http_response_code(201);
+
+            echo json_encode([
+                'success' => true,
+                'message' =>
+                    'Subscription pricing proposal created successfully.',
+                'data' => [
+                    'plan_version_id' => $versionId,
+                    'status' => 'pending'
+                ]
+            ]);
+
+        } catch (Exception $e) {
+            http_response_code(400);
+
+            echo json_encode([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
 }

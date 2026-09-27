@@ -288,6 +288,21 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     && $requestMethod === 'GET'
 ) {
     (new SubscriptionController($subscriptionService))->getPricing();
+
+    // Finance Manager proposes pricing
+} elseif (
+    $requestUri === '/api/subscriptions/pricing'
+    && $requestMethod === 'POST'
+) {
+    (new SubscriptionController($subscriptionService))->proposePricing();
+
+// Get current subscription
+} elseif (
+    $requestUri === '/api/subscriptions/current'
+    && $requestMethod === 'GET'
+) {
+    (new SubscriptionController($subscriptionService))->getCurrent();
+
 } elseif (
     $requestUri === '/api/subscriptions/current'
     && $requestMethod === 'GET'
