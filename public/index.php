@@ -283,6 +283,13 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     && $requestMethod === 'POST'
 ) {
     (new SubscriptionController($subscriptionService))->verify();
+
+} elseif (
+    $requestUri === '/api/subscriptions/payment/resume'
+    && $requestMethod === 'POST'
+) {
+    (new SubscriptionController($subscriptionService))->resumePayment();
+
 } elseif (
     $requestUri === '/api/subscriptions/pricing'
     && $requestMethod === 'GET'

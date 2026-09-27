@@ -779,6 +779,154 @@ class SubscriptionService
 
 
     /**
+     * Resume payment for an existing pending subscription.
+     *
+     * This does not create a new subscription or payment.
+     * It only reinitializes the Paystack checkout for the
+     * existing pending payment.
+     */
+    public function resumePendingSubscriptionPayment(
+        int $userId
+    ): array {
+
+        /*
+         * Find the user's pending subscription.
+         */
+        $subscription =
+            $this->subscriptionRepository
+                ->findPendingByUserId($userId);
+
+        if ($subscription === null) {
+            throw new Exception(
+                'No pending subscription found.'
+            );
+        }
+
+        /*
+         * Make sure the subscription belongs to
+         * the authenticated user.
+         */
+        if ($subscription->userId !== $userId) {
+            throw new Exception(
+                'You are not authorized to resume this payment.'
+            );
+        }
+
+        /*
+         * Find payments associated with this subscription.
+         *
+         * The repository returns the newest payment first.
+         */
+        $payments =
+            $this->paymentRepository
+                ->findBySubscriptionId(
+                    $subscription->id
+                );
+
+        if (empty($payments)) {
+            throw new Exception(
+                'No payment was found for this subscription.'
+            );
+        }
+
+        /*
+         * Find the pending payment.
+         */
+        $payment = null;
+
+        foreach ($payments as $candidatePayment) {
+
+            if ($candidatePayment->status === 'pending') {
+                $payment = $candidatePayment;
+                break;
+            }
+        }
+
+        if ($payment === null) {
+            throw new Exception(
+                'No pending payment was found for this subscription.'
+            );
+        }
+
+        /*
+         * Get the authenticated user's account.
+         */
+        $user =
+            $this->userRepository
+                ->findById($userId);
+
+        if ($user === null) {
+            throw new Exception(
+                'User account not found.'
+            );
+        }
+
+        if (empty($user->email)) {
+            throw new Exception(
+                'User email address is required for payment.'
+            );
+        }
+
+        /*
+         * Reinitialize Paystack using the existing
+         * HairConnect payment reference.
+         *
+         * We deliberately do not create another
+         * subscription or payment record.
+         */
+        $paystackTransaction =
+            $this->paystackService
+                ->initializeTransaction(
+                    $user->email,
+                    (float) $payment->amount,
+                    $payment->reference,
+                    [
+                        'type' =>
+                            'subscription',
+
+                        'user_id' =>
+                            $userId,
+
+                        'subscription_id' =>
+                            $subscription->id,
+
+                        'plan_id' =>
+                            $subscription->planId,
+
+                        'plan_version_id' =>
+                            $subscription->planVersionId
+                    ]
+                );
+
+        return [
+            'subscription' =>
+                $subscription,
+
+            'payment' =>
+                $payment,
+
+            'amount' =>
+                (float) $payment->amount,
+
+            'currency' =>
+                $payment->currency,
+
+            'reference' =>
+                $payment->reference,
+
+            'authorization_url' =>
+                $paystackTransaction['authorization_url']
+                ?? null,
+
+            'access_code' =>
+                $paystackTransaction['access_code']
+                ?? null
+        ];
+    }
+
+
+
+    /**
      * Calculate yearly subscription price
      * from an approved pricing version.
      */

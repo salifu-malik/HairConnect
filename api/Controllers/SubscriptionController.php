@@ -214,6 +214,41 @@ class SubscriptionController
     }
 
 
+    /**
+     * Resume payment for an existing pending subscription.
+     */
+    public function resumePayment(): void
+    {
+        try {
+
+            $userId = $this->getAuthenticatedUserId();
+
+            $result =
+                $this->subscriptionService
+                    ->resumePendingSubscriptionPayment(
+                        $userId
+                    );
+
+            http_response_code(200);
+
+            echo json_encode([
+                'success' => true,
+                'message' =>
+                    'Subscription payment checkout initialized successfully.',
+                'data' => $result
+            ]);
+
+        } catch (Exception $e) {
+
+            http_response_code(400);
+
+            echo json_encode([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
     public function getCurrent(): void
     {
         header('Content-Type: application/json');
