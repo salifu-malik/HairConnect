@@ -301,4 +301,35 @@ class SubscriptionController
         }
     }
 
+    /**
+     * Get pending subscription pricing proposals for Admin review.
+     */
+    public function getPendingPricing(): void
+    {
+        header('Content-Type: application/json');
+
+        try {
+            $adminId = $this->getAuthenticatedUserId();
+
+            $pendingPricing = $this->subscriptionService
+                ->getPendingPricing($adminId);
+
+            http_response_code(200);
+
+            echo json_encode([
+                'success' => true,
+                'message' => 'Pending subscription pricing retrieved successfully.',
+                'data' => $pendingPricing
+            ]);
+
+        } catch (Exception $e) {
+            http_response_code(400);
+
+            echo json_encode([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
 }
