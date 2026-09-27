@@ -4,6 +4,9 @@
 
     RewriteBase /barber-backend/public/
 
+    # Pass Authorization header to PHP
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
     # If the file or directory exists, serve it directly
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d

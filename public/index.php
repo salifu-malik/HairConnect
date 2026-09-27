@@ -1,7 +1,7 @@
 <?php
 
 declare(strict_types=1);
-namespace Api\Controllers\Booking;
+//namespace Api\Controllers\Booking;
 
 ini_set('display_errors', '1');
 ini_set('display_startup_errors', '1');
@@ -31,22 +31,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once __DIR__ . '/../bootstrap.php';
 
+use Api\Controllers\SubscriptionController;
 use Api\Controllers\Auth\AuthController;
-use Api\Controllers\Booking\BarberServiceController;
-//use Api\Controllers\BookingController;
-use Api\Controllers\StoreController;
 use Api\Controllers\Profile\ProfileController;
-use Api\Controllers\Barber\BarberController;
-use Api\Controllers\Barber\BarberDiscoveryController;
-use Api\Controllers\Barber\BarberScheduleController;
-use Api\Controllers\Barber\HomeServiceController;
-use Api\Controllers\ShopOwner\ShopController;
 use App\Helpers\DatabaseManager;
-use Api\Controllers\Admin\AdminController;
+
+use App\Repositories\PlanRepository;
+use App\Repositories\PlanVersionRepository;
+use App\Repositories\SubscriptionRepository;
+use App\Repositories\SubscriptionPaymentRepository;
+use App\Repositories\UserRepository;
+use App\Repositories\SubscriptionEventRepository;
+use App\Services\PaystackService;
+use App\Services\SubscriptionService;
 
 $config = require __DIR__ . '/../config/database.php';
 
 DatabaseManager::init($config);
+
+
+
+$subscriptionService = new SubscriptionService(
+    new PlanRepository(),
+    new PlanVersionRepository(),
+    new SubscriptionRepository(),
+    new SubscriptionPaymentRepository(),
+    new UserRepository(),
+    new SubscriptionEventRepository(),
+    new PaystackService()
+);
 
 $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
@@ -58,6 +71,16 @@ if (strpos($requestUri, $projectPath) === 0) {
 
 $requestMethod = $_SERVER['REQUEST_METHOD'];
 
+//if ($requestUri === '/api/test-auth' && $requestMethod === 'GET') {
+//    header('Content-Type: application/json');
+//
+//    echo json_encode([
+//        'authorization' => $_SERVER['HTTP_AUTHORIZATION'] ?? null,
+//        'redirect_http_authorization' => $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null,
+//    ]);
+//
+//    exit;
+//}
 
 
 //AUTH ROUTES
@@ -246,6 +269,36 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 } elseif ($requestUri === '/api/orders' && $requestMethod === 'POST') {
 
     (new StoreController())->placeOrder();
+
+
+    // SUBSCRIPTION ROUTES
+} elseif (
+    $requestUri === '/api/subscriptions'
+    && $requestMethod === 'POST'
+) {
+    (new SubscriptionController($subscriptionService))->create();
+
+} elseif (
+    $requestUri === '/api/subscriptions/verify'
+    && $requestMethod === 'POST'
+) {
+    (new SubscriptionController($subscriptionService))->verify();
+} elseif (
+    $requestUri === '/api/subscriptions/pricing'
+    && $requestMethod === 'GET'
+) {
+    (new SubscriptionController($subscriptionService))->getPricing();
+} elseif (
+    $requestUri === '/api/subscriptions/current'
+    && $requestMethod === 'GET'
+) {
+    (new SubscriptionController($subscriptionService))->getCurrent();
+
+} elseif (
+    $requestUri === '/api/subscriptions/pricing/pending'
+    && $requestMethod === 'GET'
+) {
+    (new SubscriptionController($subscriptionService))->getPendingPricing();
 
 
     // ADMIN ROUTES

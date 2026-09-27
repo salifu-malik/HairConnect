@@ -157,6 +157,42 @@ class SubscriptionService
     }
 
 
+    public function getCurrentSubscription(int $userId): array
+    {
+        $activeSubscription =
+            $this->subscriptionRepository->findActiveByUserId($userId);
+
+        if ($activeSubscription) {
+            return [
+                'status' => 'active',
+                'subscription' => $activeSubscription,
+                'payment' => null
+            ];
+        }
+
+        $pendingSubscription =
+            $this->subscriptionRepository->findPendingByUserId($userId);
+
+        if ($pendingSubscription) {
+
+            $payment =
+                $this->paymentRepository
+                    ->findBySubscriptionId($pendingSubscription->id);
+
+            return [
+                'status' => 'pending',
+                'subscription' => $pendingSubscription,
+                'payment' => $payment
+            ];
+        }
+
+        return [
+            'status' => 'none',
+            'subscription' => null,
+            'payment' => null
+        ];
+    }
+
     /**
      * Finance Manager proposes new subscription pricing.
      */
