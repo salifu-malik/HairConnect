@@ -332,4 +332,134 @@ class SubscriptionController
         }
     }
 
+    /**
+     * Approve or reject a pending subscription pricing proposal.
+     *
+     * Expected JSON:
+     * {
+     *     "plan_version_id": 1,
+     *     "approval_status": "approved"
+     * }
+     *
+     * For rejection:
+     * {
+     *     "plan_version_id": 1,
+     *     "approval_status": "rejected",
+     *     "rejection_reason": "Reason for rejection"
+     * }
+     */
+    public function updatePricingApproval(): void
+    {
+        header('Content-Type: application/json');
+
+        try {
+            $adminId = $this->getAuthenticatedUserId();
+
+            $input = json_decode(
+                file_get_contents('php://input'),
+                true
+            );
+
+            if (!is_array($input)) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Invalid request body.'
+                ]);
+
+                return;
+            }
+
+            $planVersionId = isset($input['plan_version_id'])
+                ? (int) $input['plan_version_id']
+                : 0;
+
+            $approvalStatus = strtolower(
+                trim($input['approval_status'] ?? '')
+            );
+
+            $rejectionReason = isset($input['rejection_reason'])
+                ? trim($input['rejection_reason'])
+                : null;
+
+            if ($planVersionId <= 0) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'plan_version_id is required.'
+                ]);
+
+                return;
+            }
+
+            if (!in_array(
+                $approvalStatus,
+                ['approved', 'rejected'],
+                true
+            )) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' =>
+                        'approval_status must be approved or rejected.'
+                ]);
+
+                return;
+            }
+
+            if (
+                $approvalStatus === 'rejected' &&
+                ($rejectionReason === null || $rejectionReason === '')
+            ) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'A rejection reason is required.'
+                ]);
+
+                return;
+            }
+
+            $result = $this->subscriptionService
+                ->updatePricingApproval(
+                    $adminId,
+                    $planVersionId,
+                    $approvalStatus,
+                    $rejectionReason
+                );
+
+            if (!$result) {
+                http_response_code(400);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Unable to update pricing approval.'
+                ]);
+
+                return;
+            }
+
+            http_response_code(200);
+
+            echo json_encode([
+                'success' => true,
+                'message' => $approvalStatus === 'approved'
+                    ? 'Subscription pricing approved successfully.'
+                    : 'Subscription pricing rejected successfully.'
+            ]);
+
+        } catch (Exception $e) {
+            http_response_code(400);
+
+            echo json_encode([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
 }

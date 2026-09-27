@@ -300,6 +300,12 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 ) {
     (new SubscriptionController($subscriptionService))->getPendingPricing();
 
+} elseif (
+    $requestUri === '/api/subscriptions/pricing/approval'
+    && $requestMethod === 'POST'
+) {
+    (new SubscriptionController($subscriptionService))->updatePricingApproval();
+
 
     // ADMIN ROUTES
 } elseif (
