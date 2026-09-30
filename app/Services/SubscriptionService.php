@@ -782,8 +782,8 @@ class SubscriptionService
      * Resume payment for an existing pending subscription.
      *
      * This does not create a new subscription or payment.
-     * It only reinitializes the Paystack checkout for the
-     * existing pending payment.
+     * It creates a new Paystack transaction reference for
+     * the existing pending payment.
      */
     public function resumePendingSubscriptionPayment(
         int $userId
@@ -868,18 +868,25 @@ class SubscriptionService
         }
 
         /*
-         * Reinitialize Paystack using the existing
-         * HairConnect payment reference.
+         * Generate a NEW Paystack transaction reference.
          *
-         * We deliberately do not create another
-         * subscription or payment record.
+         * The previous reference has already been registered
+         * with Paystack, so it cannot be initialized again.
+         */
+        $newReference =
+            $this->paystackService
+                ->generateReference();
+
+        /*
+         * Initialize a new Paystack checkout using the
+         * existing subscription payment amount.
          */
         $paystackTransaction =
             $this->paystackService
                 ->initializeTransaction(
                     $user->email,
                     (float) $payment->amount,
-                    $payment->reference,
+                    $newReference,
                     [
                         'type' =>
                             'subscription',
@@ -898,12 +905,39 @@ class SubscriptionService
                     ]
                 );
 
+        /*
+         * Update the EXISTING payment record with the
+         * new Paystack reference.
+         *
+         * We do not create another payment row.
+         */
+        $referenceUpdated =
+            $this->paymentRepository
+                ->updateReference(
+                    $payment->id,
+                    $newReference
+                );
+
+        if (!$referenceUpdated) {
+            throw new Exception(
+                'Paystack checkout was initialized, but the payment reference could not be updated.'
+            );
+        }
+
+        /*
+         * Reload the payment so the returned object contains
+         * the new reference.
+         */
+        $updatedPayment =
+            $this->paymentRepository
+                ->findById($payment->id);
+
         return [
             'subscription' =>
                 $subscription,
 
             'payment' =>
-                $payment,
+                $updatedPayment,
 
             'amount' =>
                 (float) $payment->amount,
@@ -912,7 +946,7 @@ class SubscriptionService
                 $payment->currency,
 
             'reference' =>
-                $payment->reference,
+                $newReference,
 
             'authorization_url' =>
                 $paystackTransaction['authorization_url']
@@ -923,7 +957,6 @@ class SubscriptionService
                 ?? null
         ];
     }
-
 
 
     /**

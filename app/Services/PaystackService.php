@@ -8,12 +8,14 @@ class PaystackService
 {
     private string $secretKey;
     private string $baseUrl;
+    private string $callbackUrl;
 
     public function __construct()
     {
         $this->secretKey = getenv('PAYSTACK_SECRET_KEY') ?: '';
         $this->baseUrl = getenv('PAYSTACK_BASE_URL')
             ?: 'https://api.paystack.co';
+        $this->callbackUrl = getenv('PAYSTACK_CALLBACK_URL') ?: '';
 
         if ($this->secretKey === '') {
             throw new Exception(
@@ -65,6 +67,8 @@ class PaystackService
             'currency' => 'GHS',
 
             'reference' => $reference,
+
+            'callback_url' => $this->callbackUrl,
 
             'metadata' => $metadata
         ];

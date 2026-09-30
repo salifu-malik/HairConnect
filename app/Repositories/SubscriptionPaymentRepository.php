@@ -102,6 +102,26 @@ class SubscriptionPaymentRepository
         return new SubscriptionPayment($data);
     }
 
+    /**
+     * Update the Paystack transaction reference
+     * for an existing subscription payment.
+     */
+    public function updateReference(
+        int $paymentId,
+        string $reference
+    ): bool {
+        $stmt = $this->db->prepare(
+            "UPDATE subscription_payments
+         SET reference = :reference
+         WHERE id = :id"
+        );
+
+        return $stmt->execute([
+            ':reference' => $reference,
+            ':id' => $paymentId
+        ]);
+    }
+
     public function updateStatus(
         int $paymentId,
         string $status

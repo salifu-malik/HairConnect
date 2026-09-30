@@ -167,6 +167,27 @@ class UserRepository {
             'id' => $userId
         ]);
     }
+
+
+
+    public function markEmailAsVerified(int $userId): bool
+    {
+        $stmt = $this->db->prepare("
+        UPDATE users
+        SET email_verified_at = CURRENT_TIMESTAMP
+        WHERE id = :id
+          AND email_verified_at IS NULL
+    ");
+
+        $stmt->execute([
+            'id' => $userId
+        ]);
+
+        return $stmt->rowCount() > 0;
+    }
+
+
+
 }
 
 

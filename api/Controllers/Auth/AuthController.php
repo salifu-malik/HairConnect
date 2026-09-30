@@ -6,6 +6,7 @@ use App\Repositories\PasswordResetRepository;
 use App\Repositories\SessionRepository;
 use App\Repositories\UserRepository;
 use App\Services\AuthService;
+use App\Helpers\RedisManager;
 use App\Services\MailService;
 
 class AuthController
@@ -18,8 +19,37 @@ class AuthController
             new UserRepository(),
             new SessionRepository(),
             new PasswordResetRepository(),
-            new MailService()
+            new MailService(),
+            new RedisManager()
         );
+    }
+
+    private function setRefreshTokenCookie(string $refreshToken): void
+    {
+        $secure = getenv('COOKIE_SECURE') === 'true';
+
+        setcookie('refresh_token', $refreshToken, [
+            'expires' => time() + (7 * 24 * 60 * 60),
+            'path' => '/',
+            'secure' => $secure,
+            'httponly' => true,
+            'samesite' => getenv('COOKIE_SAMESITE') ?: 'Lax',
+        ]);
+    }
+
+
+
+    private function clearRefreshTokenCookie(): void
+    {
+        $secure = getenv('COOKIE_SECURE') === 'true';
+
+        setcookie('refresh_token', '', [
+            'expires' => time() - 3600,
+            'path' => '/',
+            'secure' => $secure,
+            'httponly' => true,
+            'samesite' => getenv('COOKIE_SAMESITE') ?: 'Lax',
+        ]);
     }
 
     /**
@@ -56,6 +86,100 @@ class AuthController
         }
     }
 
+
+
+    /**
+     * POST /api/auth/verify-email
+     */
+    public function verifyEmail()
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        $data = json_decode(
+            file_get_contents('php://input'),
+            true
+        );
+
+        try {
+
+            $token = trim(
+                $data['token'] ?? ''
+            );
+
+            if (empty($token)) {
+                throw new \Exception(
+                    'Verification token is required.'
+                );
+            }
+
+            $this->authService->verifyEmail($token);
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'Email verified successfully.'
+            ]);
+
+        } catch (\Throwable $e) {
+
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+
+    /**
+     * POST /api/auth/resend-verification
+     */
+    public function resendVerification()
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        $data = json_decode(
+            file_get_contents('php://input'),
+            true
+        );
+
+        try {
+
+            $email = trim(
+                strtolower($data['email'] ?? '')
+            );
+
+            if (empty($email)) {
+                throw new \Exception(
+                    'Email is required.'
+                );
+            }
+
+            $this->authService->resendVerificationEmail($email);
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' =>
+                    'If the account exists and has not been verified, a new verification email has been sent.'
+            ]);
+
+        } catch (\Throwable $e) {
+
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+
+
     /**
      * POST /api/auth/login
      */
@@ -75,6 +199,19 @@ class AuthController
                 $data['password'] ?? ''
             );
 
+            /*
+             * Store the refresh token in an HttpOnly cookie.
+             */
+            $this->setRefreshTokenCookie(
+                $result['refresh_token']
+            );
+
+            /*
+             * Never send the refresh token
+             * back to the frontend in JSON.
+             */
+            unset($result['refresh_token']);
+
             http_response_code(200);
 
             echo json_encode([
@@ -84,17 +221,15 @@ class AuthController
 
         } catch (\Throwable $e) {
 
-            http_response_code(500);
+            http_response_code(401);
 
             echo json_encode([
                 'status' => 'error',
-                'message' => $e->getMessage(),
-                'type' => get_class($e),
-                'file' => $e->getFile(),
-                'line' => $e->getLine()
+                'message' => $e->getMessage()
             ]);
         }
     }
+
 
     /**
      * POST /api/auth/refresh
@@ -103,16 +238,36 @@ class AuthController
     {
         header('Content-Type: application/json');
 
-        $data = json_decode(
-            file_get_contents('php://input'),
-            true
-        );
-
         try {
 
+            /*
+             * Read the refresh token from the HttpOnly cookie.
+             */
+            $refreshToken = $_COOKIE['refresh_token'] ?? '';
+
+            if (empty($refreshToken)) {
+                throw new \Exception(
+                    'Refresh token is missing.'
+                );
+            }
+
             $result = $this->authService->refresh(
-                $data['refresh_token'] ?? ''
+                $refreshToken
             );
+
+            /*
+             * The refresh token is rotated by AuthService.
+             * Store the new token in the cookie.
+             */
+            $this->setRefreshTokenCookie(
+                $result['refresh_token']
+            );
+
+            /*
+             * Never expose the refresh token
+             * to the frontend.
+             */
+            unset($result['refresh_token']);
 
             http_response_code(200);
 
@@ -121,7 +276,7 @@ class AuthController
                 'data' => $result
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
 
             http_response_code(401);
 
@@ -139,16 +294,24 @@ class AuthController
     {
         header('Content-Type: application/json');
 
-        $data = json_decode(
-            file_get_contents('php://input'),
-            true
-        );
-
         try {
 
-            $this->authService->logout(
-                $data['refresh_token'] ?? ''
-            );
+            /*
+             * Read refresh token from HttpOnly cookie.
+             */
+            $refreshToken = $_COOKIE['refresh_token'] ?? '';
+
+            if (!empty($refreshToken)) {
+
+                $this->authService->logout(
+                    $refreshToken
+                );
+            }
+
+            /*
+             * Clear the browser cookie.
+             */
+            $this->clearRefreshTokenCookie();
 
             http_response_code(200);
 
@@ -157,7 +320,13 @@ class AuthController
                 'message' => 'Logged out'
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+
+            /*
+             * Even if server-side revocation fails,
+             * attempt to remove the browser cookie.
+             */
+            $this->clearRefreshTokenCookie();
 
             http_response_code(400);
 

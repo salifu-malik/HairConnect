@@ -13,6 +13,7 @@ class User implements \JsonSerializable
     private string $passwordHash;
     public string $status;
     public array $roles = [];
+    public ?string $emailVerifiedAt;
 
     public function __construct(array $data)
     {
@@ -31,6 +32,8 @@ class User implements \JsonSerializable
         $this->profileImage = $data['profile_image'] ?? null;
 
         $this->status = $data['status'] ?? 'active';
+
+        $this->emailVerifiedAt = $data['email_verified_at'] ?? null;
     }
 
     public function jsonSerialize(): mixed

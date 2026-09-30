@@ -8,6 +8,7 @@ use App\Repositories\SessionRepository;
 use App\Repositories\PasswordResetRepository;
 use App\Validators\AuthValidator;
 use App\Helpers\JwtHelper;
+use App\Helpers\RedisManager;
 use Exception;
 use App\Services\MailService;
 
@@ -17,41 +18,348 @@ class AuthService
     private UserRepository $userRepository;
     private SessionRepository $sessionRepository;
     private PasswordResetRepository $passwordResetRepository;
+    private RedisManager $redisManager;
     private MailService $mailService;
 
-    public function __construct(UserRepository $userRepository, SessionRepository $sessionRepository,  PasswordResetRepository $passwordResetRepository, MailService $mailService)
+    public function __construct(UserRepository $userRepository, SessionRepository $sessionRepository,  PasswordResetRepository $passwordResetRepository, MailService $mailService, RedisManager $redisManager)
     {
         $this->userRepository = $userRepository;
         $this->sessionRepository = $sessionRepository;
         $this->passwordResetRepository = $passwordResetRepository;
         $this->mailService = $mailService;
+        $this->redisManager = $redisManager;
     }
 
     public function register(array $data): int
     {
         AuthValidator::validateRegistration($data);
 
-        if ($this->userRepository->findByEmail($data['email'])) {
+        $email = trim(strtolower($data['email']));
+
+        if ($this->userRepository->findByEmail($email)) {
             throw new Exception("Email already exists.");
         }
 
-        // Convert frontend field names to database field names
-        $data['first_name'] = $data['firstname'];
-        $data['last_name'] = $data['lastname'];
+        // Normalize email
+        $data['email'] = $email;
 
+        // Create user
         $userId = $this->userRepository->create($data);
 
+        // Assign selected role
         $this->userRepository->assignRole(
             $userId,
             $data['role']
+        );
+
+        /*
+         * Generate a cryptographically secure verification token.
+         *
+         * The raw token is sent to the user's email.
+         * Only its SHA-256 hash is stored in Redis.
+         */
+        $token = bin2hex(random_bytes(32));
+
+        $tokenHash = hash('sha256', $token);
+
+        /*
+         * Store verification information in Redis.
+         *
+         * Token lifetime: 15 minutes.
+         */
+        $tokenKey = "email_verification:token:{$tokenHash}";
+
+        $this->redisManager->set(
+            $tokenKey,
+            [
+                'user_id' => $userId,
+                'email' => $email,
+            ],
+            15 * 60
+        );
+
+        /*
+         * Keep track of the current token for this user.
+         * This allows a future resend operation to invalidate
+         * the previous token.
+         */
+        $currentTokenKey = "email_verification:current:{$userId}";
+
+        $this->redisManager->set(
+            $currentTokenKey,
+            [
+                'token_hash' => $tokenHash,
+            ],
+            15 * 60
+        );
+
+        /*
+         * Count verification emails.
+         *
+         * Maximum: 3 emails per 15 minutes.
+         */
+        $emailKey = hash('sha256', $email);
+
+        $sendCountKey =
+            "email_verification:send:15m:{$emailKey}";
+
+        $sendCount = $this->redisManager->increment(
+            $sendCountKey,
+            15 * 60
+        );
+
+        if ($sendCount > 3) {
+            /*
+             * The account has already been created, but we should
+             * not leave the newly generated verification token
+             * active if the rate limit has been exceeded.
+             */
+            $this->redisManager->delete($tokenKey);
+            $this->redisManager->delete($currentTokenKey);
+
+            throw new Exception(
+                "Too many verification emails requested. Please try again later."
+            );
+        }
+
+        /*
+         * Build frontend verification URL.
+         */
+        $frontendUrl =
+            getenv('FRONTEND_URL')
+                ?: 'http://localhost:5173';
+
+        $verificationUrl =
+            rtrim($frontendUrl, '/') .
+            '/verify-email?token=' .
+            urlencode($token);
+
+        /*
+         * Send verification email.
+         */
+        $this->mailService->sendEmailVerification(
+            $email,
+            $verificationUrl
         );
 
         return $userId;
     }
 
 
+
+
+    public function resendVerificationEmail(string $email): void
+    {
+        $email = trim(strtolower($email));
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new Exception('Invalid email address.');
+        }
+
+        $user = $this->userRepository->findByEmail($email);
+
+        /*
+         * Don't reveal whether an account exists.
+         */
+        if (!$user) {
+            return;
+        }
+
+        /*
+         * Already verified.
+         */
+        if ($user->emailVerifiedAt !== null) {
+            return;
+        }
+
+        $emailKey = hash('sha256', $email);
+
+        $sendCountKey =
+            "email_verification:send:15m:{$emailKey}";
+
+        $sendCount = $this->redisManager->increment(
+            $sendCountKey,
+            15 * 60
+        );
+
+        if ($sendCount > 3) {
+            throw new Exception(
+                "Too many verification emails requested. Please try again later."
+            );
+        }
+
+        /*
+         * Invalidate the previous token.
+         */
+        $currentTokenKey =
+            "email_verification:current:{$user->id}";
+
+        $currentToken = $this->redisManager->get(
+            $currentTokenKey
+        );
+
+        if (
+            is_array($currentToken) &&
+            !empty($currentToken['token_hash'])
+        ) {
+            $oldTokenKey =
+                "email_verification:token:" .
+                $currentToken['token_hash'];
+
+            $this->redisManager->delete($oldTokenKey);
+        }
+
+        /*
+         * Generate new token.
+         */
+        $token = bin2hex(random_bytes(32));
+
+        $tokenHash = hash('sha256', $token);
+
+        $tokenKey =
+            "email_verification:token:{$tokenHash}";
+
+        $this->redisManager->set(
+            $tokenKey,
+            [
+                'user_id' => $user->id,
+                'email' => $email,
+            ],
+            15 * 60
+        );
+
+        $this->redisManager->set(
+            $currentTokenKey,
+            [
+                'token_hash' => $tokenHash,
+            ],
+            15 * 60
+        );
+
+        $frontendUrl =
+            getenv('FRONTEND_URL')
+                ?: 'http://localhost:5173';
+
+        $verificationUrl =
+            rtrim($frontendUrl, '/') .
+            '/verify-email?token=' .
+            urlencode($token);
+
+        $this->mailService->sendEmailVerification(
+            $email,
+            $verificationUrl
+        );
+    }
+
+
+    /**
+     * Verify a user's email address using the
+     * token supplied from the verification link.
+     */
+    public function verifyEmail(string $token): void
+    {
+        $token = trim($token);
+
+        if ($token === '') {
+            throw new Exception(
+                'Verification token is required.'
+            );
+        }
+
+        /*
+         * Hash the token supplied by the client.
+         *
+         * The raw token is never stored in Redis.
+         */
+        $tokenHash = hash(
+            'sha256',
+            $token
+        );
+
+        $tokenKey =
+            "email_verification:token:{$tokenHash}";
+
+        /*
+         * Retrieve the verification record from Redis.
+         */
+        $verificationData = $this->redisManager->get(
+            $tokenKey
+        );
+
+        /*
+         * Redis returns null when the token does not exist
+         * or has expired.
+         */
+        if (
+            !is_array($verificationData) ||
+            empty($verificationData['user_id'])
+        ) {
+            throw new Exception(
+                'Invalid or expired verification link.'
+            );
+        }
+
+        $userId = (int) $verificationData['user_id'];
+
+        /*
+         * Retrieve the user from the database.
+         */
+        $user = $this->userRepository->findById($userId);
+
+        if (!$user) {
+            /*
+             * Remove the invalid verification record.
+             */
+            $this->redisManager->delete($tokenKey);
+
+            throw new Exception(
+                'Invalid verification request.'
+            );
+        }
+
+        /*
+         * If the email has already been verified,
+         * invalidate this token and stop.
+         */
+        if ($user->emailVerifiedAt !== null) {
+
+            $this->redisManager->delete($tokenKey);
+
+            $this->redisManager->delete(
+                "email_verification:current:{$userId}"
+            );
+
+            throw new Exception(
+                'This email address has already been verified.'
+            );
+        }
+
+        /*
+         * Mark the user's email as verified in MySQL.
+         */
+        $this->userRepository->markEmailAsVerified(
+            $userId
+        );
+
+        /*
+         * The verification token is now consumed.
+         */
+        $this->redisManager->delete($tokenKey);
+
+        /*
+         * Remove the current-token pointer.
+         */
+        $this->redisManager->delete(
+            "email_verification:current:{$userId}"
+        );
+    }
+
+
+
     public function login(string $email, string $password)
     {
+        $email = trim(strtolower($email));
+
         $user = $this->userRepository->findByEmail($email);
 
         if (
@@ -62,6 +370,12 @@ class AuthService
             )
         ) {
             throw new Exception("Invalid credentials.");
+        }
+
+        if ($user->emailVerifiedAt === null) {
+            throw new Exception(
+                "Please verify your email before logging in."
+            );
         }
 
         $roles = $this->userRepository->getRoles($user->id);
@@ -97,22 +411,41 @@ class AuthService
     public function refresh(string $refreshToken)
     {
         $session = $this->sessionRepository->findByToken($refreshToken);
+
         if (!$session || $session['expires_at'] < date('Y-m-d H:i:s')) {
             throw new Exception("Invalid or expired refresh token.");
         }
 
         $user = $this->userRepository->findById((int)$session['user_id']);
+
         if (!$user) {
             throw new Exception("User not found.");
         }
 
-        $accessToken = JwtHelper::encode(['user_id' => $user->id, 'email' => $user->email], 3600);
-        
+        $roles = $this->userRepository->getRoles($user->id);
+        $user->roles = $roles;
+
+        $accessToken = JwtHelper::encode([
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'roles' => $roles
+        ], 3600);
+
         // Rotate refresh token
         $this->sessionRepository->deleteByToken($refreshToken);
+
         $newRefreshToken = bin2hex(random_bytes(64));
-        $expiresAt = date('Y-m-d H:i:s', time() + (7 * 24 * 3600));
-        $this->sessionRepository->save($user->id, $newRefreshToken, $expiresAt);
+
+        $expiresAt = date(
+            'Y-m-d H:i:s',
+            time() + (7 * 24 * 3600)
+        );
+
+        $this->sessionRepository->save(
+            $user->id,
+            $newRefreshToken,
+            $expiresAt
+        );
 
         return [
             'token' => $accessToken,

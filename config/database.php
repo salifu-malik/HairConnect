@@ -63,6 +63,12 @@ return [
             'user' => $_ENV['DB_USER'],
             'password' => $_ENV['DB_PASSWORD'],
         ],
+        'audit_db' => [
+            'host' => $_ENV['DB_HOST'],
+            'dbname' => 'audit_db',
+            'user' => $_ENV['DB_USER'],
+            'password' => $_ENV['DB_PASSWORD'],
+        ],
         // ... add other databases
     ]
 ];

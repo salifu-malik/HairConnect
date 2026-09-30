@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
 use App\Repositories\UserRepository;
+use App\Helpers\SubscriptionGuard;
 use Exception;
 
 class BarberService
@@ -12,6 +13,7 @@ class BarberService
     private BarberRepository $barberRepository;
     private ShopRepository $shopRepository;
     private UserRepository $userRepository;
+    private SubscriptionGuard $subscriptionGuard;
 
     public function __construct(
         BarberRepository $barberRepository,
@@ -21,6 +23,7 @@ class BarberService
         $this->barberRepository = $barberRepository;
         $this->shopRepository = $shopRepository;
         $this->userRepository = $userRepository;
+        $this->subscriptionGuard = $subscriptionGuard;
     }
 
 //    Register a babrber without a shop(Indepent Barber)
@@ -28,6 +31,11 @@ class BarberService
         int $userId,
         array $data
     ): int {
+        if ($userId <= 0) {
+            throw new Exception('Invalid authenticated user.');
+        }
+        $this->subscriptionGuard->requireActiveSubscription($userId);
+
         if ($userId <= 0) {
             throw new Exception('Invalid authenticated user.');
         }
@@ -93,6 +101,7 @@ class BarberService
         if ($userId <= 0) {
             throw new Exception('Invalid authenticated user.');
         }
+        $this->subscriptionGuard->requireActiveSubscription($userId);
 
         if ($shopId <= 0) {
             throw new Exception('Invalid shop.');

@@ -65,6 +65,23 @@ class RedisManager
         return $this->redis->exists($key) > 0;
     }
 
+
+
+    public function increment(
+        string $key,
+        int $ttl = 900
+    ): int {
+        $count = $this->redis->incr($key);
+
+        if ($count === 1) {
+            $this->redis->expire($key, $ttl);
+        }
+
+        return $count;
+    }
+
+
+
     public function clear(): void
     {
         $this->redis->flushDB();

@@ -7,6 +7,7 @@ ini_set('display_errors', '1');
 ini_set('display_startup_errors', '1');
 error_reporting(E_ALL);
 
+
 // CORS
 $allowedOrigins = [
     'http://localhost:5173',
@@ -17,8 +18,8 @@ $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 if (in_array($origin, $allowedOrigins, true)) {
     header("Access-Control-Allow-Origin: {$origin}");
     header('Vary: Origin');
+    header('Access-Control-Allow-Credentials: true');
 }
-
 
 header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
@@ -35,6 +36,7 @@ use Api\Controllers\SubscriptionController;
 use Api\Controllers\Auth\AuthController;
 use Api\Controllers\Profile\ProfileController;
 use App\Helpers\DatabaseManager;
+use Api\Controllers\Admin\AdminController;
 
 use App\Repositories\PlanRepository;
 use App\Repositories\PlanVersionRepository;
@@ -71,22 +73,20 @@ if (strpos($requestUri, $projectPath) === 0) {
 
 $requestMethod = $_SERVER['REQUEST_METHOD'];
 
-//if ($requestUri === '/api/test-auth' && $requestMethod === 'GET') {
-//    header('Content-Type: application/json');
-//
-//    echo json_encode([
-//        'authorization' => $_SERVER['HTTP_AUTHORIZATION'] ?? null,
-//        'redirect_http_authorization' => $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null,
-//    ]);
-//
-//    exit;
-//}
 
 
-//AUTH ROUTES
+// AUTH ROUTES
 if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
     (new AuthController())->register();
+
+} elseif ($requestUri === '/api/auth/verify-email' && $requestMethod === 'POST') {
+
+    (new AuthController())->verifyEmail();
+
+} elseif ($requestUri === '/api/auth/resend-verification' && $requestMethod === 'POST') {
+
+    (new AuthController())->resendVerification();
 
 } elseif ($requestUri === '/api/auth/login' && $requestMethod === 'POST') {
 
@@ -112,26 +112,6 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
     (new AuthController())->resetPassword();
 
-} elseif ($requestUri === '/api/profile' && $requestMethod === 'GET') {
-
-    (new ProfileController())->getProfile();
-
-} elseif ($requestUri === '/api/profile' && $requestMethod === 'PUT') {
-
-    (new ProfileController())->updateProfile();
-
-} elseif ($requestUri === '/api/profile/image' && $requestMethod === 'POST') {
-
-    (new ProfileController())->uploadProfileImage();
-
-} elseif ($requestUri === '/api/profile/change-password' && $requestMethod === 'POST') {
-    (new ProfileController())->changePassword();
-} elseif ($requestUri === '/api/shops' && $requestMethod === 'POST') {
-    (new ShopController())->createShop();
-} elseif ($requestUri === '/api/shops/my' && $requestMethod === 'GET') {
-    (new ShopController())->getMyShops();
-} elseif ($requestUri === '/api/shops/available' && $requestMethod === 'GET') {
-    (new ShopController())->getAvailableShops();
 
 
 // BARBER ROUTES

@@ -105,4 +105,100 @@ class MailService
             );
         }
     }
+
+
+    public function sendEmailVerification(
+        string $recipientEmail,
+        string $verificationUrl
+    ): void {
+        try {
+            $this->mailer->clearAddresses();
+
+            $this->mailer->addAddress($recipientEmail);
+
+            $this->mailer->Subject = 'Verify Your HairConnect Email';
+
+            $safeUrl = htmlspecialchars(
+                $verificationUrl,
+                ENT_QUOTES,
+                'UTF-8'
+            );
+
+            $this->mailer->Body = '
+            <div style="
+                font-family: Arial, sans-serif;
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 30px;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+            ">
+                <h2>Welcome to HairConnect</h2>
+
+                <p>
+                    Thank you for creating your HairConnect account.
+                </p>
+
+                <p>
+                    Please verify your email address by clicking
+                    the button below.
+                </p>
+
+                <div style="
+                    text-align: center;
+                    margin: 30px 0;
+                ">
+                    <a
+                        href="' . $safeUrl . '"
+                        style="
+                            display: inline-block;
+                            padding: 12px 24px;
+                            background: #000000;
+                            color: #ffffff;
+                            text-decoration: none;
+                            border-radius: 6px;
+                            font-weight: bold;
+                        "
+                    >
+                        Verify Email
+                    </a>
+                </div>
+
+                <p>
+                    This verification link will expire in
+                    <strong>15 minutes</strong>.
+                </p>
+
+                <p>
+                    If you did not create a HairConnect account,
+                    you can safely ignore this email.
+                </p>
+
+                <p>
+                    Regards,<br>
+                    <strong>HairConnect Team</strong>
+                </p>
+            </div>
+        ';
+
+            $this->mailer->AltBody =
+                "Welcome to HairConnect\n\n" .
+                "Please verify your email address using the link below:\n\n" .
+                "{$verificationUrl}\n\n" .
+                "This verification link will expire in 15 minutes.\n\n" .
+                "If you did not create a HairConnect account, " .
+                "you can safely ignore this email.";
+
+            $this->mailer->send();
+
+        } catch (PHPMailerException $e) {
+            throw new \Exception(
+                'Unable to send the email verification message.'
+            );
+        }
+    }
+
+
+
+
 }
