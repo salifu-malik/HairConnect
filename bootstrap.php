@@ -1,7 +1,9 @@
 <?php
 
 date_default_timezone_set('Africa/Accra');
+
 use App\Helpers\Env;
+use App\Helpers\DatabaseManager;
 
 spl_autoload_register(function ($class) {
     $parts = explode('\\', $class);
@@ -17,3 +19,7 @@ spl_autoload_register(function ($class) {
 require_once __DIR__ . '/vendor/autoload.php';
 
 Env::load(__DIR__ . '/.env');
+
+$config = require __DIR__ . '/config/database.php';
+
+DatabaseManager::init($config);

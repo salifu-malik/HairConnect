@@ -35,7 +35,6 @@ require_once __DIR__ . '/../bootstrap.php';
 use Api\Controllers\SubscriptionController;
 use Api\Controllers\Auth\AuthController;
 use Api\Controllers\Profile\ProfileController;
-use App\Helpers\DatabaseManager;
 use Api\Controllers\Admin\AdminController;
 
 use App\Repositories\PlanRepository;
@@ -47,9 +46,7 @@ use App\Repositories\SubscriptionEventRepository;
 use App\Services\PaystackService;
 use App\Services\SubscriptionService;
 
-$config = require __DIR__ . '/../config/database.php';
 
-DatabaseManager::init($config);
 
 
 
