@@ -433,41 +433,95 @@ class AuthService
     {
         $session = $this->sessionRepository->findByToken($refreshToken);
 
-        if (!$session || $session['expires_at'] < date('Y-m-d H:i:s')) {
+        /*
+         * Validate the refresh-token session.
+         */
+        if (
+            !$session ||
+            $session['expires_at'] < date('Y-m-d H:i:s')
+        ) {
             throw new Exception("Invalid or expired refresh token.");
         }
 
-        $user = $this->userRepository->findById((int)$session['user_id']);
+        /*
+         * Retrieve the user associated with the refresh-token session.
+         */
+        $user = $this->userRepository->findById(
+            (int) $session['user_id']
+        );
 
         if (!$user) {
             throw new Exception("User not found.");
         }
 
+        /*
+         * Retrieve the user's current roles.
+         *
+         * This ensures that newly changed roles are reflected
+         * whenever a new access token is issued.
+         */
         $roles = $this->userRepository->getRoles($user->id);
         $user->roles = $roles;
 
+        /*
+         * Generate a new access token.
+         */
         $accessToken = JwtHelper::encode([
             'user_id' => $user->id,
             'email' => $user->email,
             'roles' => $roles
         ], 3600);
 
-        // Rotate refresh token
+        /*
+         * Record the successful token refresh.
+         *
+         * Never store the access token or refresh token
+         * in the audit log.
+         */
+        $this->auditLogService->auth(
+            'TOKEN_REFRESH',
+            $user,
+            'Access token refreshed successfully.'
+        );
+
+        /*
+         * Rotate the refresh token.
+         *
+         * The old refresh token becomes invalid immediately.
+         */
         $this->sessionRepository->deleteByToken($refreshToken);
 
-        $newRefreshToken = bin2hex(random_bytes(64));
+        /*
+         * Generate a new cryptographically secure refresh token.
+         */
+        $newRefreshToken = bin2hex(
+            random_bytes(64)
+        );
 
+        /*
+         * Set the new refresh-token expiration.
+         */
         $expiresAt = date(
             'Y-m-d H:i:s',
             time() + (7 * 24 * 3600)
         );
 
+        /*
+         * Store the new refresh-token session.
+         */
         $this->sessionRepository->save(
             $user->id,
             $newRefreshToken,
             $expiresAt
         );
 
+        /*
+         * Return the new tokens.
+         *
+         * AuthController will place the refresh token
+         * into the HttpOnly cookie and remove it from
+         * the JSON response.
+         */
         return [
             'token' => $accessToken,
             'refresh_token' => $newRefreshToken
