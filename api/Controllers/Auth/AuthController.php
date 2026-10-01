@@ -5,9 +5,12 @@ namespace Api\Controllers\Auth;
 use App\Repositories\PasswordResetRepository;
 use App\Repositories\SessionRepository;
 use App\Repositories\UserRepository;
+use App\Repositories\AuditLogRepository;
+use App\Services\AuditLogService;
 use App\Services\AuthService;
 use App\Helpers\RedisManager;
 use App\Services\MailService;
+
 
 class AuthController
 {
@@ -20,7 +23,10 @@ class AuthController
             new SessionRepository(),
             new PasswordResetRepository(),
             new MailService(),
-            new RedisManager()
+            new RedisManager(),
+            new AuditLogService(
+                new AuditLogRepository()
+            )
         );
     }
 

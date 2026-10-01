@@ -10,6 +10,8 @@ use App\Validators\AuthValidator;
 use App\Helpers\JwtHelper;
 use App\Helpers\RedisManager;
 use Exception;
+use App\Repositories\AuditLogRepository;
+use App\Services\AuditLogService;
 use App\Services\MailService;
 
 
@@ -20,14 +22,16 @@ class AuthService
     private PasswordResetRepository $passwordResetRepository;
     private RedisManager $redisManager;
     private MailService $mailService;
+    private AuditLogService $auditLogService;
 
-    public function __construct(UserRepository $userRepository, SessionRepository $sessionRepository,  PasswordResetRepository $passwordResetRepository, MailService $mailService, RedisManager $redisManager)
+    public function __construct(UserRepository $userRepository, SessionRepository $sessionRepository,  PasswordResetRepository $passwordResetRepository, MailService $mailService, RedisManager $redisManager, AuditLogService $auditLogService)
     {
         $this->userRepository = $userRepository;
         $this->sessionRepository = $sessionRepository;
         $this->passwordResetRepository = $passwordResetRepository;
         $this->mailService = $mailService;
         $this->redisManager = $redisManager;
+        $this->auditLogService = $auditLogService;
     }
 
     public function register(array $data): int
@@ -369,9 +373,20 @@ class AuthService
                 $user->getPasswordHash()
             )
         ) {
+            $this->auditLogService->log([
+                'user_id' => $user?->id,
+                'user_email' => $email,
+                'user_role' => null,
+                'action' => 'LOGIN_FAILED',
+                'module' => 'AUTH',
+                'description' => 'Login failed due to invalid credentials.',
+                'metadata' => [
+                    'reason' => 'invalid_credentials',
+                ],
+            ]);
+
             throw new Exception("Invalid credentials.");
         }
-
         if ($user->emailVerifiedAt === null) {
             throw new Exception(
                 "Please verify your email before logging in."
@@ -381,6 +396,12 @@ class AuthService
         $roles = $this->userRepository->getRoles($user->id);
 
         $user->roles = $roles;
+
+        $this->auditLogService->auth(
+            'LOGIN_SUCCESS',
+            $user,
+            'User logged in successfully.'
+        );
 
         $accessToken = JwtHelper::encode([
             'user_id' => $user->id,
@@ -455,9 +476,27 @@ class AuthService
 
     public function logout(string $refreshToken)
     {
+        $session = $this->sessionRepository->findByToken($refreshToken);
+
+        if ($session) {
+            $user = $this->userRepository->findById(
+                (int) $session['user_id']
+            );
+
+            if ($user) {
+                $roles = $this->userRepository->getRoles($user->id);
+                $user->roles = $roles;
+
+                $this->auditLogService->auth(
+                    'LOGOUT',
+                    $user,
+                    'User logged out successfully.'
+                );
+            }
+        }
+
         $this->sessionRepository->deleteByToken($refreshToken);
     }
-
 
     public function forgotPassword(string $email): ?string
     {
