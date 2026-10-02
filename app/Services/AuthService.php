@@ -130,8 +130,8 @@ class AuthService
          * Build frontend verification URL.
          */
         $frontendUrl =
-            getenv('FRONTEND_URL')
-                ?: 'http://localhost:5173';
+            getenv('FRONTEND_URL');
+//                ?: 'http://localhost:5173';
 
         $verificationUrl =
             rtrim($frontendUrl, '/') .
@@ -241,8 +241,8 @@ class AuthService
         );
 
         $frontendUrl =
-            getenv('FRONTEND_URL')
-                ?: 'http://localhost:5173';
+            getenv('FRONTEND_URL');
+//                ?: 'http://localhost:5173';
 
         $verificationUrl =
             rtrim($frontendUrl, '/') .
@@ -407,7 +407,7 @@ class AuthService
             'user_id' => $user->id,
             'email' => $user->email,
             'roles' => $roles
-        ], 3600);
+        ], 60);
 
         $refreshToken = bin2hex(random_bytes(64));
 
@@ -433,9 +433,9 @@ class AuthService
     {
         $session = $this->sessionRepository->findByToken($refreshToken);
 
-        /*
-         * Validate the refresh-token session.
-         */
+
+         //Validate the refresh-token session.
+
         if (
             !$session ||
             $session['expires_at'] < date('Y-m-d H:i:s')
@@ -443,9 +443,9 @@ class AuthService
             throw new Exception("Invalid or expired refresh token.");
         }
 
-        /*
-         * Retrieve the user associated with the refresh-token session.
-         */
+
+         // Retrieve the user associated with the refresh-token session.
+
         $user = $this->userRepository->findById(
             (int) $session['user_id']
         );
@@ -463,14 +463,14 @@ class AuthService
         $roles = $this->userRepository->getRoles($user->id);
         $user->roles = $roles;
 
-        /*
-         * Generate a new access token.
-         */
+
+         //Generate a new access token.
+
         $accessToken = JwtHelper::encode([
             'user_id' => $user->id,
             'email' => $user->email,
             'roles' => $roles
-        ], 3600);
+        ], 60);
 
         /*
          * Record the successful token refresh.
@@ -491,24 +491,24 @@ class AuthService
          */
         $this->sessionRepository->deleteByToken($refreshToken);
 
-        /*
-         * Generate a new cryptographically secure refresh token.
-         */
+
+         // Generate a new cryptographically secure refresh token.
+
         $newRefreshToken = bin2hex(
             random_bytes(64)
         );
 
-        /*
-         * Set the new refresh-token expiration.
-         */
+
+        //Set the new refresh-token expiration.
+
         $expiresAt = date(
             'Y-m-d H:i:s',
             time() + (7 * 24 * 3600)
         );
 
-        /*
-         * Store the new refresh-token session.
-         */
+
+         //Store the new refresh-token session.
+
         $this->sessionRepository->save(
             $user->id,
             $newRefreshToken,
@@ -562,16 +562,16 @@ class AuthService
 
         $user = $this->userRepository->findByEmail($email);
 
-        /*
-         * Do not reveal whether an account exists.
-         */
+
+        // Do not reveal whether an account exists.
+
         if (!$user) {
             return null;
         }
 
-        /*
-         * Enforce the 5-minute resend restriction.
-         */
+
+         //Enforce the 5-minute resend restriction.
+
         $latestRequest = $this->passwordResetRepository
             ->findLatestByEmail($email);
 
@@ -586,20 +586,20 @@ class AuthService
             }
         }
 
-        /*
-         * Invalidate previous reset requests.
-         */
+
+         //Invalidate previous reset requests.
+
         $this->passwordResetRepository
             ->invalidatePreviousRequests($email);
 
-        /*
-         * Generate a new 6-digit verification code.
-         */
+
+         //Generate a new 6-digit verification code.
+
         $code = (string) random_int(100000, 999999);
 
-        /*
-         * Never store the actual code in the database.
-         */
+
+         //Never store the actual code in the database.
+
         $codeHash = password_hash(
             $code,
             PASSWORD_DEFAULT
@@ -612,9 +612,9 @@ class AuthService
 
         $now = date('Y-m-d H:i:s');
 
-        /*
-         * Save the hashed code.
-         */
+
+        //Save the hashed code.
+
         $this->passwordResetRepository->create(
             $user->id,
             $email,
@@ -623,17 +623,17 @@ class AuthService
             $now
         );
 
-        /*
-         * Send the actual code to the user's email.
-         */
+
+         //Send the actual code to the user's email.
+
         $this->mailService->sendPasswordResetCode(
             $email,
             $code
         );
 
-        /*
-         * The code is intentionally NOT returned.
-         */
+
+         //The code is intentionally NOT returned.
+
         return null;
     }
 
@@ -675,9 +675,8 @@ class AuthService
             );
         }
 
-        /*
-         * Check whether verification is temporarily blocked.
-         */
+
+         //Check whether verification is temporarily blocked.
         if (
             !empty($request['blocked_until']) &&
             strtotime($request['blocked_until']) > time()
@@ -687,9 +686,9 @@ class AuthService
             );
         }
 
-        /*
-         * Check whether the verification code has expired.
-         */
+
+         //Check whether the verification code has expired.
+
         if (
             empty($request['expires_at']) ||
             strtotime($request['expires_at']) <= time()
@@ -699,9 +698,9 @@ class AuthService
             );
         }
 
-        /*
-         * Verify the code.
-         */
+
+         //Verify the code.
+
         if (
             !password_verify(
                 $code,
@@ -709,9 +708,9 @@ class AuthService
             )
         ) {
 
-            /*
-             * Count this failed attempt.
-             */
+
+             //Count this failed attempt.
+
             $this->passwordResetRepository
                 ->incrementAttempts(
                     (int) $request['id']
@@ -745,9 +744,9 @@ class AuthService
             );
         }
 
-        /*
-         * The verification code is correct.
-         */
+
+         //The verification code is correct.
+
         $this->passwordResetRepository->markVerified(
             (int) $request['id']
         );
@@ -760,17 +759,17 @@ class AuthService
             random_bytes(32)
         );
 
-        /*
-         * Store only the SHA-256 hash.
-         */
+
+         //Store only the SHA-256 hash.
+
         $resetTokenHash = hash(
             'sha256',
             $resetToken
         );
 
-        /*
-         * Reset token expires after 15 minutes.
-         */
+
+        //Reset token expires after 15 minutes.
+
         $resetTokenExpiresAt = date(
             'Y-m-d H:i:s',
             time() + (15 * 60)
@@ -816,9 +815,9 @@ class AuthService
             );
         }
 
-        /*
-         * Hash the token supplied by the client.
-         */
+
+        //Hash the token supplied by the client.
+
         $resetTokenHash = hash(
             'sha256',
             $resetToken
@@ -849,18 +848,18 @@ class AuthService
             );
         }
 
-        /*
-         * Make sure the request belongs to a real user.
-         */
+
+        //Make sure the request belongs to a real user.
+
         if (empty($request['user_id'])) {
             throw new Exception(
                 "Invalid password reset request."
             );
         }
 
-        /*
-         * Hash the new password.
-         */
+
+       //Hash the new password.
+
         $passwordHash = password_hash(
             $password,
             PASSWORD_DEFAULT
@@ -872,24 +871,22 @@ class AuthService
             );
         }
 
-        /*
-         * Update the password.
-         */
+
+         // Update the password.
         $this->userRepository->updatePassword(
             (int) $request['user_id'],
             $passwordHash
         );
 
-        /*
-         * Immediately invalidate the reset token.
-         */
+
+        //Immediately invalidate the reset token.
+
         $this->passwordResetRepository->consume(
             (int) $request['id']
         );
 
         /*
          * Invalidate all existing sessions.
-         *
          * This logs the user out of existing devices.
          */
         $this->sessionRepository->deleteAllForUser(
