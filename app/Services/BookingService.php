@@ -528,4 +528,13 @@ class BookingService
             throw $e;
         }
     }
+
+    public function getCustomerAppointments(int $customerId): array
+    {
+        if ($customerId <= 0) {
+            throw new Exception('Invalid customer.');
+        }
+
+        return $this->appointmentRepository->findByCustomer($customerId);
+    }
 }

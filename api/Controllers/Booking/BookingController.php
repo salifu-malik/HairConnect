@@ -80,4 +80,42 @@ class BookingController
             ]);
         }
     }
+
+
+    public function getMyAppointments(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        /*
+         * Authenticate the caller and require CUSTOMER role.
+         *
+         * The customer ID comes from the authenticated database user,
+         * not from the request.
+         */
+        $auth = AuthMiddleware::checkRole(['CUSTOMER']);
+        $customerId = (int) $auth['user']->id;
+
+        try {
+            $appointments = $this->bookingService->getCustomerAppointments(
+                $customerId
+            );
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'data' => $appointments
+            ]);
+
+        } catch (\Exception $e) {
+
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
 }

@@ -83,6 +83,47 @@ class AppointmentRepository
     }
 
 
+    public function findByCustomer(int $customerId): array
+    {
+        $stmt = $this->db->prepare("
+        SELECT
+            a.id,
+            a.customer_id,
+            a.shop_id,
+            a.barber_id,
+            CONCAT(u.first_name, ' ', u.last_name) AS barber_name,
+            u.profile_image AS barber_profile_image,
+            a.service_id,
+            s.name AS service_name,
+            s.price AS service_price,
+            a.service_location,
+            a.duration_minutes,
+            a.appointment_date,
+            a.appointment_time,
+            a.status,
+            sh.name AS shop_name,
+            sh.location AS shop_location
+        FROM appointments a
+        INNER JOIN barbers b
+            ON a.barber_id = b.id
+        INNER JOIN users_db.users u
+        ON b.user_id = u.id
+        INNER JOIN services s
+            ON a.service_id = s.id
+        LEFT JOIN shops sh
+            ON a.shop_id = sh.id
+        WHERE a.customer_id = :customer_id
+        ORDER BY a.appointment_date DESC, a.appointment_time DESC
+    ");
+
+        $stmt->execute([
+            'customer_id' => $customerId,
+        ]);
+
+        return $stmt->fetchAll();
+    }
+
+
     //Start a booking transaction.
     public function beginTransaction(): void
     {

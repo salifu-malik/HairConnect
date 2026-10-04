@@ -38,6 +38,7 @@ use Api\Controllers\Profile\ProfileController;
 use Api\Controllers\Admin\AdminController;
 use Api\Controllers\Booking\BookingController;
 use Api\Controllers\Booking\BarberServiceController;
+use Api\Controllers\Barber\BarberDiscoveryController;
 
 use App\Repositories\PlanRepository;
 use App\Repositories\PlanVersionRepository;
@@ -278,7 +279,11 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     );
 
 
-    //BOOKING ROUTES
+
+//BOOKING ROUTES
+} elseif ($requestUri === '/api/bookings' && $requestMethod === 'GET') {
+    (new BookingController())->getMyAppointments();
+
 } elseif ($requestUri === '/api/bookings' && $requestMethod === 'POST') {
     (new BookingController())->bookAppointment();
 
