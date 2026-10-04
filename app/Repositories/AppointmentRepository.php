@@ -14,8 +14,6 @@ class AppointmentRepository
         $this->db = DatabaseManager::getConnection('booking_db');
     }
 
-
-     //Create an appointment.
     public function create(array $data): bool
     {
         $stmt = $this->db->prepare("
@@ -43,7 +41,7 @@ class AppointmentRepository
 
         return $stmt->execute([
             'customer_id' => $data['customer_id'],
-            'shop_id' => $data['shop_id'] ?? null,
+            'shop_id' => $data['shop_id'],
             'barber_id' => $data['barber_id'],
             'service_id' => $data['service_id'],
             'service_location' => $data['service_location'],
@@ -53,13 +51,6 @@ class AppointmentRepository
         ]);
     }
 
-    /**
-     * Get all active appointments for a barber
-     * on a specific date.
-     *
-     * Cancelled appointments are excluded because
-     * they no longer occupy the barber's schedule.
-     */
     public function findByBarberAndDate(
         int $barberId,
         string $appointmentDate
@@ -75,9 +66,7 @@ class AppointmentRepository
                 duration_minutes,
                 appointment_date,
                 appointment_time,
-                status,
-                created_at,
-                updated_at
+                status
             FROM appointments
             WHERE barber_id = :barber_id
               AND appointment_date = :appointment_date
@@ -91,5 +80,95 @@ class AppointmentRepository
         ]);
 
         return $stmt->fetchAll();
+    }
+
+
+    //Start a booking transaction.
+    public function beginTransaction(): void
+    {
+        $this->db->beginTransaction();
+    }
+
+    /**
+     * Lock the booking resource for one barber on one date.
+     *
+     * The lock is deliberately scoped to:
+     *     barber_id + booking_date
+     *
+     * This protects the barber's entire calendar for that date,
+     * including both SHOP and HOME appointments.
+     */
+    public function lockBarberDate(
+        int $barberId,
+        string $bookingDate
+    ): void {
+        /*
+         * Create the lock row if it does not already exist.
+         *
+         * ON DUPLICATE KEY UPDATE allows concurrent booking
+         * requests for the same barber/date to safely converge
+         * on the same lock row.
+         */
+        $insertStmt = $this->db->prepare("
+            INSERT INTO barber_booking_locks (
+                barber_id,
+                booking_date
+            )
+            VALUES (
+                :barber_id,
+                :booking_date
+            )
+            ON DUPLICATE KEY UPDATE
+                booking_date = VALUES(booking_date)
+        ");
+
+        $insertStmt->execute([
+            'barber_id' => $barberId,
+            'booking_date' => $bookingDate,
+        ]);
+
+        /*
+         * Acquire an exclusive row lock.
+         *
+         * Any concurrent transaction attempting to book the
+         * same barber on the same date must wait here until
+         * this transaction commits or rolls back.
+         */
+        $lockStmt = $this->db->prepare("
+            SELECT
+                barber_id,
+                booking_date
+            FROM barber_booking_locks
+            WHERE barber_id = :barber_id
+              AND booking_date = :booking_date
+            FOR UPDATE
+        ");
+
+        $lockStmt->execute([
+            'barber_id' => $barberId,
+            'booking_date' => $bookingDate,
+        ]);
+
+        if (!$lockStmt->fetch()) {
+            throw new \RuntimeException(
+                'Unable to acquire booking lock.'
+            );
+        }
+    }
+
+
+    //Commit the current booking transaction.
+    public function commit(): void
+    {
+        $this->db->commit();
+    }
+
+
+     //Roll back the current booking transaction.
+    public function rollback(): void
+    {
+        if ($this->db->inTransaction()) {
+            $this->db->rollBack();
+        }
     }
 }

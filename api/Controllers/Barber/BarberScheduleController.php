@@ -2,7 +2,7 @@
 
 namespace Api\Controllers\Barber;
 
-use App\Helpers\JwtHelper;
+use Api\Middleware\AuthMiddleware;
 use App\Repositories\BarberRepository;
 use App\Repositories\BarberScheduleRepository;
 use App\Services\BarberScheduleService;
@@ -24,14 +24,16 @@ class BarberScheduleController
     }
 
 
-    //Get the authenticated barber's schedule.
+     //Get the authenticated barber's schedule.
     public function getMySchedule(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        try {
-            $userId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['BARBER']);
 
+        $userId = (int) $auth['user']->id;
+
+        try {
             $schedules = $this->scheduleService->getMySchedule(
                 $userId
             );
@@ -42,6 +44,7 @@ class BarberScheduleController
                 'status' => 'success',
                 'data' => $schedules,
             ]);
+
         } catch (Exception $e) {
             http_response_code(400);
 
@@ -53,14 +56,16 @@ class BarberScheduleController
     }
 
 
-     //Create a schedule for the authenticated barber.
+    //Create a schedule for the authenticated barber.
     public function create(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        try {
-            $userId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['BARBER']);
 
+        $userId = (int) $auth['user']->id;
+
+        try {
             $data = json_decode(
                 file_get_contents('php://input'),
                 true
@@ -84,6 +89,7 @@ class BarberScheduleController
                 'message' =>
                     'Barber schedule created successfully.',
             ]);
+
         } catch (Exception $e) {
             http_response_code(400);
 
@@ -95,14 +101,16 @@ class BarberScheduleController
     }
 
 
-    //Update a schedule belonging to the authenticated barber.
+     //Update a schedule belonging to the authenticated barber.
     public function update(int $scheduleId): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        try {
-            $userId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['BARBER']);
 
+        $userId = (int) $auth['user']->id;
+
+        try {
             $data = json_decode(
                 file_get_contents('php://input'),
                 true
@@ -127,6 +135,7 @@ class BarberScheduleController
                 'message' =>
                     'Barber schedule updated successfully.',
             ]);
+
         } catch (Exception $e) {
             http_response_code(400);
 
@@ -143,9 +152,11 @@ class BarberScheduleController
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        try {
-            $userId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['BARBER']);
 
+        $userId = (int) $auth['user']->id;
+
+        try {
             $this->scheduleService->delete(
                 $userId,
                 $scheduleId
@@ -158,6 +169,7 @@ class BarberScheduleController
                 'message' =>
                     'Barber schedule deleted successfully.',
             ]);
+
         } catch (Exception $e) {
             http_response_code(400);
 
@@ -166,61 +178,5 @@ class BarberScheduleController
                 'message' => $e->getMessage(),
             ]);
         }
-    }
-
-
-     //Get authenticated user ID from JWT.
-    private function getAuthenticatedUserId(): int
-    {
-        $authorizationHeader =
-            $_SERVER['HTTP_AUTHORIZATION']
-            ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
-            ?? '';
-
-        if (
-            $authorizationHeader === ''
-            && function_exists('getallheaders')
-        ) {
-            $headers = getallheaders();
-
-            $authorizationHeader =
-                $headers['Authorization']
-                ?? $headers['authorization']
-                ?? '';
-        }
-
-        if ($authorizationHeader === '') {
-            throw new Exception(
-                'Authorization token is required.'
-            );
-        }
-
-        if (!preg_match(
-            '/^Bearer\s+(.+)$/i',
-            trim($authorizationHeader),
-            $matches
-        )) {
-            throw new Exception(
-                'Invalid authorization header.'
-            );
-        }
-
-        $token = trim($matches[1]);
-
-        $payload = JwtHelper::decode($token);
-
-        if ($payload === null) {
-            throw new Exception(
-                'Invalid or expired token.'
-            );
-        }
-
-        if (!isset($payload['user_id'])) {
-            throw new Exception(
-                'Invalid token payload.'
-            );
-        }
-
-        return (int) $payload['user_id'];
     }
 }

@@ -2,7 +2,7 @@
 
 namespace Api\Controllers\Admin;
 
-use App\Helpers\JwtHelper;
+use Api\Middleware\AuthMiddleware;
 use App\Repositories\ShopRepository;
 use App\Repositories\UserRepository;
 use App\Services\AdminService;
@@ -20,13 +20,15 @@ class AdminController
         );
     }
 
-    /**
-     * GET /api/admin/shops/pending
-     */
+
+     //GET /api/admin/shops/pending
     public function getPendingShops(): void
     {
+        header('Content-Type: application/json; charset=UTF-8');
+
         try {
-            $adminId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::checkRole(['ADMIN']);
+            $adminId = (int) $auth['user']->id;
 
             $shops = $this->adminService->getPendingShops($adminId);
 
@@ -63,18 +65,24 @@ class AdminController
         }
     }
 
-    /**
-     * PATCH /api/admin/shops/{id}/approval
-     */
+
+     //PATCH /api/admin/shops/{id}/approval
     public function updateShopApproval(int $shopId): void
     {
+        header('Content-Type: application/json; charset=UTF-8');
+
         try {
-            $adminId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::checkRole(['ADMIN']);
+            $adminId = (int) $auth['user']->id;
 
             $input = json_decode(
                 file_get_contents('php://input'),
                 true
             );
+
+            if (!is_array($input)) {
+                throw new Exception('Invalid request data.');
+            }
 
             $approvalStatus = $input['approval_status'] ?? null;
 
@@ -105,35 +113,5 @@ class AdminController
                 'message' => $e->getMessage()
             ]);
         }
-    }
-
-    /**
-     * Extract authenticated user ID from JWT.
-     */
-    private function getAuthenticatedUserId(): int
-    {
-        $headers = getallheaders();
-
-        $authorization = $headers['Authorization']
-            ?? $headers['authorization']
-            ?? null;
-
-        if (!$authorization) {
-            throw new Exception('Authorization token required.');
-        }
-
-        if (!preg_match('/Bearer\s+(.+)/i', $authorization, $matches)) {
-            throw new Exception('Invalid authorization header.');
-        }
-
-        $token = trim($matches[1]);
-
-        $payload = JwtHelper::decode($token);
-
-        if (!$payload || !isset($payload['user_id'])) {
-            throw new Exception('Invalid or expired token.');
-        }
-
-        return (int) $payload['user_id'];
     }
 }

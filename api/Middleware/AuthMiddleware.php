@@ -1,30 +1,5 @@
 <?php
-//
-//namespace Api\Middleware;
-//
-//use App\Helpers\JwtHelper;
-//
-//class AuthMiddleware {
-//    public static function checkRole(array $requiredRoles) {
-//        $headers = getallheaders();
-//        $authHeader = $headers['Authorization'] ?? '';
-//
-//        if (!preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
-//            header("HTTP/1.0 401 Unauthorized");
-//            echo json_encode(['status' => 'error', 'message' => 'Unauthorized']);
-//            exit;
-//        }
-//
-//        $token = $matches[1];
-//        $payload = JwtHelper::decode($token);
-//
-//        if (!$payload) {
-//            header("HTTP/1.0 401 Unauthorized");
-//            echo json_encode(['status' => 'error', 'message' => 'Invalid or expired token']);
-//            exit;
-//        }
-//    }
-//}
+
 
 
 namespace Api\Middleware;
@@ -36,11 +11,7 @@ class AuthMiddleware
 {
     public static function authenticate(): array
     {
-        $headers = getallheaders();
-
-        $authHeader = $headers['Authorization']
-            ?? $headers['authorization']
-            ?? '';
+        $authHeader = self::getAuthorizationHeader();
 
         if (!preg_match('/^Bearer\s+(.+)$/i', trim($authHeader), $matches)) {
             self::unauthorized('Authorization token required.');
@@ -71,10 +42,36 @@ class AuthMiddleware
             self::unauthorized('User account no longer exists.');
         }
 
+        if ($user->status !== 'active') {
+            self::unauthorized('User account is inactive or suspended.');
+        }
+
         return [
             'user' => $user,
             'payload' => $payload
         ];
+    }
+
+
+    private static function getAuthorizationHeader(): string
+    {
+        if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
+            return $_SERVER['HTTP_AUTHORIZATION'];
+        }
+
+        if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+            return $_SERVER['REDIRECT_HTTP_AUTHORIZATION'];
+        }
+
+        if (function_exists('getallheaders')) {
+            $headers = getallheaders();
+
+            return $headers['Authorization']
+                ?? $headers['authorization']
+                ?? '';
+        }
+
+        return '';
     }
 
     public static function checkRole(array $requiredRoles): array

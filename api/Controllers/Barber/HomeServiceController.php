@@ -2,7 +2,7 @@
 
 namespace Api\Controllers\Barber;
 
-use App\Helpers\JwtHelper;
+use Api\Middleware\AuthMiddleware;
 use App\Repositories\BarberHomeServiceRepository;
 use App\Repositories\BarberRepository;
 use App\Services\BarberHomeServiceService;
@@ -20,12 +20,20 @@ class HomeServiceController
         );
     }
 
-    //POST /api/barber/home-services
+    /**
+     * POST /api/barber/home-services
+     *
+     * Create a home service for the authenticated barber.
+     */
     public function create(): void
     {
-        try {
-            $userId = $this->getAuthenticatedUserId();
+        header('Content-Type: application/json; charset=UTF-8');
 
+        $auth = AuthMiddleware::checkRole(['BARBER']);
+
+        $userId = (int) $auth['user']->id;
+
+        try {
             $input = json_decode(
                 file_get_contents('php://input'),
                 true
@@ -60,13 +68,20 @@ class HomeServiceController
         }
     }
 
-
-     //GET /api/barber/home-services
+    /**
+     * GET /api/barber/home-services
+     *
+     * Get all home services belonging to the authenticated barber.
+     */
     public function getMyServices(): void
     {
-        try {
-            $userId = $this->getAuthenticatedUserId();
+        header('Content-Type: application/json; charset=UTF-8');
 
+        $auth = AuthMiddleware::checkRole(['BARBER']);
+
+        $userId = (int) $auth['user']->id;
+
+        try {
             $services = $this->homeServiceService->getMyServices(
                 $userId
             );
@@ -104,13 +119,20 @@ class HomeServiceController
         }
     }
 
-
-    //PUT /api/barber/home-services/{id}
+    /**
+     * PUT /api/barber/home-services/{id}
+     *
+     * Update a home service belonging to the authenticated barber.
+     */
     public function update(int $serviceId): void
     {
-        try {
-            $userId = $this->getAuthenticatedUserId();
+        header('Content-Type: application/json; charset=UTF-8');
 
+        $auth = AuthMiddleware::checkRole(['BARBER']);
+
+        $userId = (int) $auth['user']->id;
+
+        try {
             $input = json_decode(
                 file_get_contents('php://input'),
                 true
@@ -143,13 +165,21 @@ class HomeServiceController
         }
     }
 
-
-     // PATCH /api/barber/home-services/{id}/status
+    /**
+     * PATCH /api/barber/home-services/{id}/status
+     *
+     * Update the status of a home service belonging to
+     * the authenticated barber.
+     */
     public function updateStatus(int $serviceId): void
     {
-        try {
-            $userId = $this->getAuthenticatedUserId();
+        header('Content-Type: application/json; charset=UTF-8');
 
+        $auth = AuthMiddleware::checkRole(['BARBER']);
+
+        $userId = (int) $auth['user']->id;
+
+        try {
             $input = json_decode(
                 file_get_contents('php://input'),
                 true
@@ -186,34 +216,5 @@ class HomeServiceController
                 'message' => $e->getMessage()
             ]);
         }
-    }
-
-
-     //Get authenticated user ID from JWT
-    private function getAuthenticatedUserId(): int
-    {
-        $headers = getallheaders();
-
-        $authorization = $headers['Authorization']
-            ?? $headers['authorization']
-            ?? null;
-
-        if (!$authorization) {
-            throw new Exception('Authorization token required.');
-        }
-
-        if (!preg_match('/Bearer\s+(.+)/i', $authorization, $matches)) {
-            throw new Exception('Invalid authorization header.');
-        }
-
-        $token = trim($matches[1]);
-
-        $payload = JwtHelper::decode($token);
-
-        if (!$payload || !isset($payload['user_id'])) {
-            throw new Exception('Invalid or expired token.');
-        }
-
-        return (int) $payload['user_id'];
     }
 }

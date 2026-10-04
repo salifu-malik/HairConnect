@@ -2,7 +2,7 @@
 
 namespace Api\Controllers;
 
-use App\Helpers\JwtHelper;
+use Api\Middleware\AuthMiddleware;
 use App\Services\SubscriptionService;
 use Exception;
 
@@ -13,32 +13,6 @@ class SubscriptionController
     public function __construct(SubscriptionService $subscriptionService)
     {
         $this->subscriptionService = $subscriptionService;
-    }
-
-    /**
-     * Get the authenticated user's ID from the JWT.
-     */
-    private function getAuthenticatedUserId(): int
-    {
-        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-
-        if (!preg_match('/Bearer\s+(.+)/i', $authHeader, $matches)) {
-            throw new Exception('Authorization token is required.');
-        }
-
-        $token = trim($matches[1]);
-
-        $payload = JwtHelper::decode($token);
-
-        if (
-            !is_array($payload) ||
-            !isset($payload['user_id']) ||
-            !is_numeric($payload['user_id'])
-        ) {
-            throw new Exception('Invalid authentication token.');
-        }
-
-        return (int) $payload['user_id'];
     }
 
     /**
@@ -55,7 +29,8 @@ class SubscriptionController
         header('Content-Type: application/json');
 
         try {
-            $userId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::authenticate();
+            $userId = (int) $auth['user']->id;
 
             $input = json_decode(
                 file_get_contents('php://input'),
@@ -137,7 +112,6 @@ class SubscriptionController
         }
     }
 
-
     /**
      * Verify a subscription payment with Paystack.
      *
@@ -151,7 +125,8 @@ class SubscriptionController
         header('Content-Type: application/json');
 
         try {
-            $userId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::authenticate();
+            $userId = (int) $auth['user']->id;
 
             $input = json_decode(
                 file_get_contents('php://input'),
@@ -214,14 +189,12 @@ class SubscriptionController
     }
 
 
-    /**
-     * Resume payment for an existing pending subscription.
-     */
+    //Resume payment for an existing pending subscription.
     public function resumePayment(): void
     {
         try {
-
-            $userId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::authenticate();
+            $userId = (int) $auth['user']->id;
 
             $result =
                 $this->subscriptionService
@@ -239,7 +212,6 @@ class SubscriptionController
             ]);
 
         } catch (Exception $e) {
-
             http_response_code(400);
 
             echo json_encode([
@@ -249,12 +221,15 @@ class SubscriptionController
         }
     }
 
+
+      //Get the current authenticated user's subscription.
     public function getCurrent(): void
     {
         header('Content-Type: application/json');
 
         try {
-            $userId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::authenticate();
+            $userId = (int) $auth['user']->id;
 
             $result = $this->subscriptionService
                 ->getCurrentSubscription($userId);
@@ -277,12 +252,13 @@ class SubscriptionController
         }
     }
 
-
     /**
      * Get the currently approved pricing for a subscription plan.
      *
      * Expected query parameter:
      * ?plan_id=1
+     *
+     * This endpoint remains public.
      */
     public function getPricing(): void
     {
@@ -314,7 +290,8 @@ class SubscriptionController
 
             echo json_encode([
                 'success' => true,
-                'message' => 'Approved subscription pricing retrieved successfully.',
+                'message' =>
+                    'Approved subscription pricing retrieved successfully.',
                 'data' => [
                     'plan_id' => $version->planId,
                     'plan_version_id' => $version->id,
@@ -336,15 +313,15 @@ class SubscriptionController
         }
     }
 
-    /**
-     * Get pending subscription pricing proposals for Admin review.
-     */
+
+     //Get pending subscription pricing proposals for Admin review.
     public function getPendingPricing(): void
     {
         header('Content-Type: application/json');
 
         try {
-            $adminId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::checkRole(['ADMIN']);
+            $adminId = (int) $auth['user']->id;
 
             $pendingPricing = $this->subscriptionService
                 ->getPendingPricing($adminId);
@@ -353,7 +330,8 @@ class SubscriptionController
 
             echo json_encode([
                 'success' => true,
-                'message' => 'Pending subscription pricing retrieved successfully.',
+                'message' =>
+                    'Pending subscription pricing retrieved successfully.',
                 'data' => $pendingPricing
             ]);
 
@@ -388,7 +366,8 @@ class SubscriptionController
         header('Content-Type: application/json');
 
         try {
-            $adminId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::checkRole(['ADMIN']);
+            $adminId = (int) $auth['user']->id;
 
             $input = json_decode(
                 file_get_contents('php://input'),
@@ -497,7 +476,6 @@ class SubscriptionController
         }
     }
 
-
     /**
      * Create a new subscription pricing proposal.
      *
@@ -515,7 +493,8 @@ class SubscriptionController
         header('Content-Type: application/json');
 
         try {
-            $financeManagerId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::checkRole(['FINANCE_MANAGER']);
+            $financeManagerId = (int) $auth['user']->id;
 
             $input = json_decode(
                 file_get_contents('php://input'),
@@ -613,5 +592,4 @@ class SubscriptionController
             ]);
         }
     }
-
 }

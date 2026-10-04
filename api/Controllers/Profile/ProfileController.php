@@ -1,9 +1,8 @@
 <?php
 
-
 namespace Api\Controllers\Profile;
 
-use App\Helpers\JwtHelper;
+use Api\Middleware\AuthMiddleware;
 use App\Repositories\SessionRepository;
 use App\Repositories\UserRepository;
 use App\Services\CloudinaryService;
@@ -20,59 +19,6 @@ class ProfileController
     }
 
     /**
-     * Extract and validate the authenticated user's ID.
-     */
-    private function getAuthenticatedUserId(): ?int
-    {
-        $authorizationHeader = $_SERVER['HTTP_AUTHORIZATION']
-            ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
-            ?? '';
-
-        if (
-            $authorizationHeader === ''
-            && function_exists('getallheaders')
-        ) {
-            $headers = getallheaders();
-
-            $authorizationHeader =
-                $headers['Authorization']
-                ?? $headers['authorization']
-                ?? '';
-        }
-
-        if ($authorizationHeader === '') {
-            return null;
-        }
-
-        if (!preg_match(
-            '/^Bearer\s+(.+)$/i',
-            trim($authorizationHeader),
-            $matches
-        )) {
-            return null;
-        }
-
-        $token = trim($matches[1]);
-
-        $payload = JwtHelper::decode($token);
-
-        if ($payload === null) {
-            return null;
-        }
-
-        $userId = $payload['user_id'] ?? null;
-
-        if (
-            $userId === null ||
-            !is_numeric($userId)
-        ) {
-            return null;
-        }
-
-        return (int) $userId;
-    }
-
-    /**
      * GET /api/profile
      */
     public function getProfile(): void
@@ -80,31 +26,9 @@ class ProfileController
         header('Content-Type: application/json; charset=UTF-8');
 
         try {
-            $userId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::authenticate();
 
-            if ($userId === null) {
-                http_response_code(401);
-
-                echo json_encode([
-                    'status' => 'error',
-                    'message' => 'Invalid or missing authorization token.'
-                ]);
-
-                return;
-            }
-
-            $user = $this->userRepository->findById($userId);
-
-            if ($user === null) {
-                http_response_code(404);
-
-                echo json_encode([
-                    'status' => 'error',
-                    'message' => 'User not found.'
-                ]);
-
-                return;
-            }
+            $user = $auth['user'];
 
             $roles = $this->userRepository->getRoles($user->id);
 
@@ -118,6 +42,8 @@ class ProfileController
             ]);
 
         } catch (\Throwable $e) {
+            error_log($e->getMessage());
+
             http_response_code(500);
 
             echo json_encode([
@@ -135,18 +61,9 @@ class ProfileController
         header('Content-Type: application/json; charset=UTF-8');
 
         try {
-            $userId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::authenticate();
 
-            if ($userId === null) {
-                http_response_code(401);
-
-                echo json_encode([
-                    'status' => 'error',
-                    'message' => 'Invalid or missing authorization token.'
-                ]);
-
-                return;
-            }
+            $userId = (int) $auth['user']->id;
 
             $data = json_decode(
                 file_get_contents('php://input'),
@@ -232,6 +149,8 @@ class ProfileController
             ]);
 
         } catch (\Throwable $e) {
+            error_log($e->getMessage());
+
             http_response_code(500);
 
             echo json_encode([
@@ -241,26 +160,17 @@ class ProfileController
         }
     }
 
-
-
-     //POST /api/profile/image
+    /**
+     * POST /api/profile/image
+     */
     public function uploadProfileImage(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
         try {
-            $userId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::authenticate();
 
-            if ($userId === null) {
-                http_response_code(401);
-
-                echo json_encode([
-                    'status' => 'error',
-                    'message' => 'Invalid or missing authorization token.'
-                ]);
-
-                return;
-            }
+            $userId = (int) $auth['user']->id;
 
             if (
                 !isset($_FILES['image']) ||
@@ -322,9 +232,7 @@ class ProfileController
                 return;
             }
 
-            if (
-                !is_uploaded_file($file['tmp_name'])
-            ) {
+            if (!is_uploaded_file($file['tmp_name'])) {
                 http_response_code(400);
 
                 echo json_encode([
@@ -371,6 +279,8 @@ class ProfileController
             ]);
 
         } catch (\Throwable $e) {
+            error_log($e->getMessage());
+
             http_response_code(500);
 
             echo json_encode([
@@ -388,18 +298,9 @@ class ProfileController
         header('Content-Type: application/json; charset=UTF-8');
 
         try {
-            $userId = $this->getAuthenticatedUserId();
+            $auth = AuthMiddleware::authenticate();
 
-            if ($userId === null) {
-                http_response_code(401);
-
-                echo json_encode([
-                    'status' => 'error',
-                    'message' => 'Invalid or missing authorization token.'
-                ]);
-
-                return;
-            }
+            $userId = (int) $auth['user']->id;
 
             $data = json_decode(
                 file_get_contents('php://input'),
@@ -510,12 +411,13 @@ class ProfileController
             ]);
 
         } catch (\Throwable $e) {
+            error_log($e->getMessage());
+
             http_response_code(500);
 
             echo json_encode([
                 'status' => 'error',
-                'message' => 'Unable to update profile.',
-                'debug' => $e->getMessage()
+                'message' => 'Unable to update profile.'
             ]);
         }
     }

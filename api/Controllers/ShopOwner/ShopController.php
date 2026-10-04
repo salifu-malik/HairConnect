@@ -1,7 +1,8 @@
 <?php
 
 namespace Api\Controllers\ShopOwner;
-use App\Helpers\JwtHelper;
+
+use Api\Middleware\AuthMiddleware;
 use App\Repositories\ShopRepository;
 use App\Repositories\UserRepository;
 use App\Services\ShopService;
@@ -18,25 +19,15 @@ class ShopController
         );
     }
 
-    /**
-     * Create a shop.
-     */
+
+    //Create a shop.
     public function createShop(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        $ownerId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['SHOP_OWNER']);
 
-        if ($ownerId === null) {
-            http_response_code(401);
-
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Authentication required.'
-            ]);
-
-            return;
-        }
+        $ownerId = (int) $auth['user']->id;
 
         $data = json_decode(
             file_get_contents('php://input'),
@@ -82,25 +73,15 @@ class ShopController
         }
     }
 
-    /**
-     * Get shops belonging to the authenticated shop owner.
-     */
+
+     //Get shops belonging to the authenticated shop owner.
     public function getMyShops(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        $ownerId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['SHOP_OWNER']);
 
-        if ($ownerId === null) {
-            http_response_code(401);
-
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Authentication required.'
-            ]);
-
-            return;
-        }
+        $ownerId = (int) $auth['user']->id;
 
         try {
             $shops = $this->shopService->getMyShops(
@@ -142,6 +123,8 @@ class ShopController
 
     /**
      * Get shops that are approved and active.
+     *
+     * Public endpoint.
      */
     public function getAvailableShops(): void
     {
@@ -178,59 +161,5 @@ class ShopController
                 'message' => $e->getMessage()
             ]);
         }
-    }
-
-    /**
-     * Extract authenticated user ID from JWT.
-     */
-    private function getAuthenticatedUserId(): ?int
-    {
-        $authorizationHeader =
-            $_SERVER['HTTP_AUTHORIZATION']
-            ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
-            ?? '';
-
-        if (
-            $authorizationHeader === ''
-            && function_exists('getallheaders')
-        ) {
-            $headers = getallheaders();
-
-            $authorizationHeader =
-                $headers['Authorization']
-                ?? $headers['authorization']
-                ?? '';
-        }
-
-        if ($authorizationHeader === '') {
-            return null;
-        }
-
-        if (!preg_match(
-            '/^Bearer\s+(.+)$/i',
-            trim($authorizationHeader),
-            $matches
-        )) {
-            return null;
-        }
-
-        $token = trim($matches[1]);
-
-        $payload = JwtHelper::decode($token);
-
-        if ($payload === null) {
-            return null;
-        }
-
-        $userId = $payload['user_id'] ?? null;
-
-        if (
-            $userId === null ||
-            !is_numeric($userId)
-        ) {
-            return null;
-        }
-
-        return (int) $userId;
     }
 }

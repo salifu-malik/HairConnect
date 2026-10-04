@@ -26,24 +26,16 @@ class ShopService
         int $ownerId,
         array $data
     ): int {
-        /*
-         * ---------------------------------------------------------
-         * 1. Validate authenticated user
-         * ---------------------------------------------------------
-         */
 
+         //Validate authenticated user
         if ($ownerId <= 0) {
             throw new Exception(
                 'Invalid authenticated user.'
             );
         }
 
-        /*
-         * ---------------------------------------------------------
-         * 2. Verify that the user exists
-         * ---------------------------------------------------------
-         */
 
+         // Verify that the user exists
         $user = $this->userRepository->findById($ownerId);
 
         if (!$user) {
@@ -52,12 +44,7 @@ class ShopService
             );
         }
 
-        /*
-         * ---------------------------------------------------------
-         * 3. Verify SHOP_OWNER role
-         * ---------------------------------------------------------
-         */
-
+         //Verify SHOP_OWNER role
         $roles = $this->userRepository->getRoles($ownerId);
 
         $isShopOwner = in_array(
@@ -72,12 +59,8 @@ class ShopService
             );
         }
 
-        /*
-         * ---------------------------------------------------------
-         * 4. Validate shop information
-         * ---------------------------------------------------------
-         */
 
+         //Validate shop information
         $name = trim(
             (string) ($data['name'] ?? '')
         );
@@ -124,12 +107,8 @@ class ShopService
         }
 
         /*
-         * ---------------------------------------------------------
          * 5. Create shop
-         * ---------------------------------------------------------
-         *
          * ShopRepository automatically creates the shop as:
-         *
          * approval_status = pending
          * status = inactive
          */
@@ -142,9 +121,8 @@ class ShopService
         ]);
     }
 
-    /**
-     * Get shops belonging to the authenticated shop owner.
-     */
+
+    //Get shops belonging to the authenticated shop owner.
     public function getMyShops(int $ownerId): array
     {
         if ($ownerId <= 0) {
@@ -174,9 +152,8 @@ class ShopService
         );
     }
 
-    /**
-     * Get shops that barbers are allowed to apply to.
-     */
+
+     //Get shops that barbers are allowed to apply to.
     public function getAvailableShops(): array
     {
         return $this->shopRepository

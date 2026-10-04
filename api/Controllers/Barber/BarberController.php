@@ -1,11 +1,13 @@
 <?php
 
 namespace Api\Controllers\Barber;
-use App\Helpers\JwtHelper;
+
+use Api\Middleware\AuthMiddleware;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
 use App\Repositories\UserRepository;
 use App\Services\BarberService;
+use App\Helpers\SubscriptionGuard;
 
 class BarberController
 {
@@ -20,25 +22,15 @@ class BarberController
         );
     }
 
-    /**
-     * Get all barbers belonging to the authenticated shop owner.
-     */
+
+     //Get all barbers belonging to the authenticated shop owner.
     public function getMyBarbers(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        $ownerId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['SHOP_OWNER']);
 
-        if ($ownerId === null) {
-            http_response_code(401);
-
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Authentication required.'
-            ]);
-
-            return;
-        }
+        $ownerId = (int) $auth['user']->id;
 
         try {
             $barbers = $this->barberService->getMyBarbers(
@@ -62,25 +54,15 @@ class BarberController
         }
     }
 
-    /**
-     * Approve or reject a barber application.
-     */
+
+    // Approve or reject a barber application.
     public function updateApproval(int $barberId): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        $ownerId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['SHOP_OWNER']);
 
-        if ($ownerId === null) {
-            http_response_code(401);
-
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Authentication required.'
-            ]);
-
-            return;
-        }
+        $ownerId = (int) $auth['user']->id;
 
         $data = json_decode(
             file_get_contents('php://input'),
@@ -141,81 +123,15 @@ class BarberController
         }
     }
 
-/**
- * Get authenticated user ID from JWT.
- */
-private function getAuthenticatedUserId(): int
-{
-    $authorizationHeader =
-        $_SERVER['HTTP_AUTHORIZATION']
-        ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
-        ?? '';
 
-    if (
-        $authorizationHeader === ''
-        && function_exists('getallheaders')
-    ) {
-        $headers = getallheaders();
-
-        $authorizationHeader =
-            $headers['Authorization']
-            ?? $headers['authorization']
-            ?? '';
-    }
-
-    if ($authorizationHeader === '') {
-        throw new Exception(
-            'Authorization token is required.'
-        );
-    }
-
-    if (!preg_match(
-        '/^Bearer\s+(.+)$/i',
-        trim($authorizationHeader),
-        $matches
-    )) {
-        throw new Exception(
-            'Invalid authorization header.'
-        );
-    }
-
-    $token = trim($matches[1]);
-
-    $payload = JwtHelper::decode($token);
-
-    if ($payload === null) {
-        throw new Exception(
-            'Invalid or expired token.'
-        );
-    }
-
-    if (!isset($payload['sub'])) {
-        throw new Exception(
-            'Invalid token payload.'
-        );
-    }
-
-    return (int) $payload['sub'];
-}
-
-    //Create  Barber profile
-
+    //Create an independent barber profile.
     public function createProfile(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        $userId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['BARBER']);
 
-        if ($userId === null) {
-            http_response_code(401);
-
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Authentication required.'
-            ]);
-
-            return;
-        }
+        $userId = (int) $auth['user']->id;
 
         $data = json_decode(
             file_get_contents('php://input'),
@@ -241,6 +157,7 @@ private function getAuthenticatedUserId(): int
                     'barber_id' => $barberId
                 ]
             ]);
+
         } catch (\Exception $e) {
             http_response_code(400);
 
@@ -251,23 +168,15 @@ private function getAuthenticatedUserId(): int
         }
     }
 
-    //Controller to apply for a shop
+
+     //Apply for a shop.
     public function applyToShop(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
-        $userId = $this->getAuthenticatedUserId();
+        $auth = AuthMiddleware::checkRole(['BARBER']);
 
-        if ($userId === null) {
-            http_response_code(401);
-
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Authentication required.'
-            ]);
-
-            return;
-        }
+        $userId = (int) $auth['user']->id;
 
         $data = json_decode(
             file_get_contents('php://input'),
@@ -292,6 +201,7 @@ private function getAuthenticatedUserId(): int
                 'status' => 'success',
                 'message' => 'Shop application submitted successfully.'
             ]);
+
         } catch (\Exception $e) {
             http_response_code(400);
 
@@ -301,5 +211,4 @@ private function getAuthenticatedUserId(): int
             ]);
         }
     }
-
 }

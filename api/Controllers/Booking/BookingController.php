@@ -1,9 +1,8 @@
 <?php
 
-
 namespace Api\Controllers\Booking;
 
-use App\Helpers\JwtHelper;
+use Api\Middleware\AuthMiddleware;
 use App\Repositories\AppointmentRepository;
 use App\Repositories\BarberRepository;
 use App\Repositories\BarberScheduleRepository;
@@ -28,27 +27,20 @@ class BookingController
         );
     }
 
-    public function bookAppointment()
+    public function bookAppointment(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
+        /*
+         * Authenticate the caller and require CUSTOMER role.
+         *
+         * The customer ID comes from the authenticated database user,
+         * not from the request body.
+         */
+        $auth = AuthMiddleware::checkRole(['CUSTOMER']);
+        $customerId = (int) $auth['user']->id;
 
-         //Get authenticated customer from JWT
-       $customerId = $this->getAuthenticatedUserId();
-
-        if ($customerId === null) {
-            http_response_code(401);
-
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Authentication required.'
-            ]);
-
-            return;
-        }
-
-
-         //Read request body
+        // Read request body
         $data = json_decode(
             file_get_contents('php://input'),
             true
@@ -87,58 +79,5 @@ class BookingController
                 'message' => $e->getMessage()
             ]);
         }
-    }
-
-
-     //Extract authenticated user ID from JWT.
-    private function getAuthenticatedUserId(): ?int
-    {
-        $authorizationHeader =
-            $_SERVER['HTTP_AUTHORIZATION']
-            ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
-            ?? '';
-
-        if (
-            $authorizationHeader === ''
-            && function_exists('getallheaders')
-        ) {
-            $headers = getallheaders();
-
-            $authorizationHeader =
-                $headers['Authorization']
-                ?? $headers['authorization']
-                ?? '';
-        }
-
-        if ($authorizationHeader === '') {
-            return null;
-        }
-
-        if (!preg_match(
-            '/^Bearer\s+(.+)$/i',
-            trim($authorizationHeader),
-            $matches
-        )) {
-            return null;
-        }
-
-        $token = trim($matches[1]);
-
-        $payload = JwtHelper::decode($token);
-
-        if ($payload === null) {
-            return null;
-        }
-
-        $userId = $payload['user_id'] ?? null;
-
-        if (
-            $userId === null ||
-            !is_numeric($userId)
-        ) {
-            return null;
-        }
-
-        return (int) $userId;
     }
 }

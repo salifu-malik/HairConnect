@@ -90,4 +90,90 @@ class SessionRepository
             'user_id' => $userId
         ]);
     }
+
+
+    public function rotateToken(
+        string $currentRefreshToken,
+        string $newRefreshToken,
+        string $newExpiresAt
+    ): ?array {
+        $currentTokenHash = hash('sha256', $currentRefreshToken);
+        $newTokenHash = hash('sha256', $newRefreshToken);
+
+        try {
+            $this->db->beginTransaction();
+
+            /*
+             * Lock the current session row.
+             *
+             * If two requests try to rotate the same refresh token
+             * simultaneously, only one request can proceed at a time.
+             */
+            $stmt = $this->db->prepare("
+            SELECT *
+            FROM sessions
+            WHERE refresh_token = :refresh_token
+              AND expires_at > NOW()
+            LIMIT 1
+            FOR UPDATE
+        ");
+
+            $stmt->execute([
+                'refresh_token' => $currentTokenHash
+            ]);
+
+            $session = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$session) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            /*
+             * Consume the old refresh token.
+             */
+            $deleteStmt = $this->db->prepare("
+            DELETE FROM sessions
+            WHERE refresh_token = :refresh_token
+        ");
+
+            $deleteStmt->execute([
+                'refresh_token' => $currentTokenHash
+            ]);
+
+            /*
+             * Store only the hash of the new refresh token.
+             */
+            $insertStmt = $this->db->prepare("
+            INSERT INTO sessions (
+                user_id,
+                refresh_token,
+                expires_at
+            )
+            VALUES (
+                :user_id,
+                :refresh_token,
+                :expires_at
+            )
+        ");
+
+            $insertStmt->execute([
+                'user_id' => $session['user_id'],
+                'refresh_token' => $newTokenHash,
+                'expires_at' => $newExpiresAt,
+            ]);
+
+            $this->db->commit();
+
+            return $session;
+
+        } catch (\Throwable $e) {
+
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $e;
+        }
+    }
 }

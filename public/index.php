@@ -36,6 +36,8 @@ use Api\Controllers\SubscriptionController;
 use Api\Controllers\Auth\AuthController;
 use Api\Controllers\Profile\ProfileController;
 use Api\Controllers\Admin\AdminController;
+use Api\Controllers\Booking\BookingController;
+use Api\Controllers\Booking\BarberServiceController;
 
 use App\Repositories\PlanRepository;
 use App\Repositories\PlanVersionRepository;
@@ -61,6 +63,10 @@ $subscriptionService = new SubscriptionService(
 );
 
 $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+
+error_log("DEBUG REQUEST URI: " . ($_SERVER['REQUEST_URI'] ?? ''));
+error_log("DEBUG PARSED URI: " . ($requestUri ?? ''));
+error_log("DEBUG METHOD: " . ($_SERVER['REQUEST_METHOD'] ?? ''));
 
 $projectPath = '/barber-backend/public';
 
@@ -108,6 +114,44 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 } elseif ($requestUri === '/api/auth/password/reset' && $requestMethod === 'POST') {
 
     (new AuthController())->resetPassword();
+
+
+    // PROFILE ROUTES
+} elseif (
+    $requestUri === '/api/users/profile'
+    && $requestMethod === 'GET'
+) {
+    (new ProfileController())->getProfile();
+
+} elseif (
+    $requestUri === '/api/users/profile'
+    && $requestMethod === 'PUT'
+) {
+    (new ProfileController())->updateProfile();
+} elseif (
+    $requestUri === '/api/profile'
+    && $requestMethod === 'GET'
+) {
+    (new ProfileController())->getProfile();
+
+} elseif (
+    $requestUri === '/api/profile'
+    && $requestMethod === 'PUT'
+) {
+    (new ProfileController())->updateProfile();
+
+} elseif (
+    $requestUri === '/api/profile/image'
+    && $requestMethod === 'POST'
+) {
+    (new ProfileController())->uploadProfileImage();
+
+} elseif (
+    $requestUri === '/api/profile/change-password'
+    && $requestMethod === 'POST'
+) {
+    (new ProfileController())->changePassword();
+
 
 
 

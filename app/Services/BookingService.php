@@ -39,7 +39,8 @@ class BookingService
     public function createAppointment(
         array $data,
         int $customerId
-    ) {
+    ): bool {
+
 
          //Validate required fields
         if (
@@ -54,10 +55,16 @@ class BookingService
             );
         }
 
+
+
+         //Validate customer
         if ($customerId <= 0) {
             throw new Exception('Invalid customer.');
         }
 
+
+
+        //Normalize input
         $barberId = (int) $data['barberId'];
         $serviceId = (int) $data['serviceId'];
 
@@ -68,14 +75,23 @@ class BookingService
         $date = trim((string) $data['date']);
         $time = trim((string) $data['time']);
 
+
+
+         //Validate barber ID
         if ($barberId <= 0) {
             throw new Exception('Invalid barber.');
         }
 
+
+
+         //Validate service ID
         if ($serviceId <= 0) {
             throw new Exception('Invalid service.');
         }
 
+
+
+        //Validate service location
         if (!in_array(
             $serviceLocation,
             ['SHOP', 'HOME'],
@@ -87,7 +103,8 @@ class BookingService
         }
 
 
-         //Validate date
+
+       // Validate appointment date
         $dateObject = DateTime::createFromFormat(
             'Y-m-d',
             $date
@@ -102,6 +119,8 @@ class BookingService
             );
         }
 
+
+        //Prevent booking in the past.
         $today = new DateTime('today');
 
         if ($dateObject < $today) {
@@ -111,7 +130,8 @@ class BookingService
         }
 
 
-         //Validate time
+
+       //Validate appointment time
         $timeObject = DateTime::createFromFormat(
             'H:i',
             $time
@@ -127,7 +147,7 @@ class BookingService
         }
 
 
-        //Find barber
+        // Find barber
         $barber = $this->barberRepository->findById(
             $barberId
         );
@@ -139,13 +159,15 @@ class BookingService
         }
 
 
-         // Barber must be approved and active.
+        //Barber must be approved.
         if ($barber->approvalStatus !== 'approved') {
             throw new Exception(
                 'This barber has not been approved yet.'
             );
         }
 
+
+        //Barber must be active.
         if ($barber->status !== 'active') {
             throw new Exception(
                 'This barber is currently unavailable.'
@@ -153,17 +175,21 @@ class BookingService
         }
 
 
-         /*Determine shop
-        * SHOP bookings require a shop.
+        /*
+         * ---------------------------------------------------------
+         * Determine shop
+         *
+         * SHOP bookings require a shop.
          *
          * HOME bookings do not require a shop because
          * independent barbers are allowed to provide
          * home services.
+         * ---------------------------------------------------------
          */
-
         $shop = null;
 
         if ($barber->shopId !== null) {
+
             $shop = $this->shopRepository->findById(
                 $barber->shopId
             );
@@ -174,12 +200,18 @@ class BookingService
                 );
             }
 
+
+             //Shop must be approved.
             if ($shop->approvalStatus !== 'approved') {
                 throw new Exception(
                     'This shop has not been approved yet.'
                 );
             }
 
+
+            /*
+             * Shop must be active.
+             */
             if ($shop->status !== 'active') {
                 throw new Exception(
                     'This shop is currently unavailable.'
@@ -188,7 +220,7 @@ class BookingService
         }
 
 
-         //SHOP service is not possible for an independent barber.
+         //Independent barbers cannot provide SHOP services.
         if (
             $serviceLocation === 'SHOP' &&
             $barber->shopId === null
@@ -199,11 +231,10 @@ class BookingService
         }
 
 
-         //Find the correct service
+         //Determine service and duration
         $durationMinutes = 0;
 
         if ($serviceLocation === 'SHOP') {
-
 
             //SHOP services come from the services table.
             $service = $this->serviceRepository->findById(
@@ -216,6 +247,8 @@ class BookingService
                 );
             }
 
+
+            //Service must be active.
             if ($service->status !== 'active') {
                 throw new Exception(
                     'This shop service is currently unavailable.'
@@ -223,7 +256,7 @@ class BookingService
             }
 
 
-            //The service must belong to the barber's shop.
+            //Service must belong to the barber's shop.
             if (
                 $shop === null ||
                 (int) $service->shopId !== (int) $shop->id
@@ -233,11 +266,11 @@ class BookingService
                 );
             }
 
+
             /*
              * If the service belongs specifically to a barber,
              * make sure the selected barber matches.
              */
-
             if (
                 $service->barberId !== null &&
                 (int) $service->barberId !== $barberId
@@ -247,12 +280,12 @@ class BookingService
                 );
             }
 
+
             $durationMinutes = (int) $service->durationMinutes;
 
         } else {
 
-
-            //HOME services come from barber_home_services.
+             //HOME services come from barber_home_services.
             $homeService =
                 $this->barberHomeServiceRepository->findById(
                     $serviceId
@@ -264,6 +297,8 @@ class BookingService
                 );
             }
 
+
+             //Home service must be active.
             if ($homeService->status !== 'active') {
                 throw new Exception(
                     'This home service is currently unavailable.'
@@ -271,7 +306,7 @@ class BookingService
             }
 
 
-            //The home service must belong to the selected barber.
+             //Home service must belong to selected barber.
             if (
                 (int) $homeService->barberId !==
                 $barberId
@@ -281,10 +316,13 @@ class BookingService
                 );
             }
 
+
             $durationMinutes =
                 (int) $homeService->durationMinutes;
         }
 
+
+        // Validate service duration
         if ($durationMinutes <= 0) {
             throw new Exception(
                 'Invalid service duration.'
@@ -292,7 +330,7 @@ class BookingService
         }
 
 
-        // Find barber schedule for the requested location
+       //Find barber schedule for requested location
         $day = $dateObject->format('l');
 
         $schedule =
@@ -309,7 +347,8 @@ class BookingService
             );
         }
 
-        //Calculate appointment start and end
+
+         //Calculate appointment start and end
         $appointmentStart = new DateTime(
             $date . ' ' . $time . ':00'
         );
@@ -321,8 +360,8 @@ class BookingService
         );
 
 
-         //Convert schedule to DateTime
-       $scheduleStart = new DateTime(
+        //Convert schedule to DateTime
+        $scheduleStart = new DateTime(
             $date . ' ' . $schedule['start_time']
         );
 
@@ -338,6 +377,7 @@ class BookingService
             );
         }
 
+
         if ($appointmentEnd > $scheduleEnd) {
             throw new Exception(
                 'The appointment extends beyond the barber\'s working hours.'
@@ -345,73 +385,147 @@ class BookingService
         }
 
 
-         //Check appointment conflicts
-        $existingAppointments =
-            $this->appointmentRepository
-                ->findByBarberAndDate(
-                    $barberId,
-                    $date
-                );
+        /*
+         * Begin booking transaction
+         *
+         * From this point, the barber/date resource is protected.
+         */
+        $this->appointmentRepository->beginTransaction();
 
-        foreach ($existingAppointments as $existing) {
-
-            $existingStart = new DateTime(
-                $date . ' ' . $existing['appointment_time']
-            );
-
-            $existingEnd = clone $existingStart;
-
-            $existingEnd->modify(
-                '+' . (int) $existing['duration_minutes'] . ' minutes'
-            );
+        try {
 
             /*
-             * Two time ranges overlap when:
+             * Lock barber + booking date
              *
-             * new start < existing end
-             * AND
-             * new end > existing start
+             * This protects the barber's entire calendar for
+             * this date, including both SHOP and HOME services.
              */
+            $this->appointmentRepository->lockBarberDate(
+                $barber->id,
+                $date
+            );
 
-            if (
-                $appointmentStart < $existingEnd &&
-                $appointmentEnd > $existingStart
-            ) {
+
+            /*
+             * Find existing appointments
+             *
+             * IMPORTANT:
+             *
+             * This query happens AFTER acquiring the lock.
+             *
+             * Therefore, two simultaneous booking requests for
+             * the same barber/date cannot both pass the conflict
+             * check using the same old appointment state.
+             */
+            $existingAppointments =
+                $this->appointmentRepository
+                    ->findByBarberAndDate(
+                        $barber->id,
+                        $date
+                    );
+
+
+             //Check appointment conflicts
+            foreach ($existingAppointments as $existingAppointment) {
+
+                $existingStart = new DateTime(
+                    $existingAppointment['appointment_date']
+                    . ' '
+                    . $existingAppointment['appointment_time']
+                );
+
+                $existingEnd =
+                    (clone $existingStart)->modify(
+                        '+' .
+                        (int) $existingAppointment['duration_minutes'] .
+                        ' minutes'
+                    );
+
+
+                /*
+                 * Two time ranges overlap when:
+                 *
+                 * new start < existing end
+                 * AND
+                 * new end > existing start
+                 *
+                 * This allows adjacent appointments:
+                 *
+                 * 10:00 - 11:00
+                 * 11:00 - 12:00
+                 *
+                 * but rejects:
+                 *
+                 * 10:00 - 11:00
+                 * 10:30 - 11:30
+                 */
+                if (
+                    $appointmentStart < $existingEnd &&
+                    $appointmentEnd > $existingStart
+                ) {
+                    throw new Exception(
+                        'The barber is already booked during the selected time.'
+                    );
+                }
+            }
+
+
+             //Prepare appointment data
+            $appointmentData = [
+                'customer_id' => $customerId,
+
+
+                //HOME appointments do not require a shop.
+                'shop_id' => $serviceLocation === 'SHOP'
+                    ? $shop?->id
+                    : null,
+
+                'barber_id' => $barber->id,
+
+                'service_id' => $serviceId,
+
+                'service_location' => $serviceLocation,
+
+                'duration_minutes' => $durationMinutes,
+
+                'appointment_date' => $date,
+
+                'appointment_time' => $time,
+            ];
+
+
+
+             //Create appointment
+            $created = $this->appointmentRepository->create(
+                $appointmentData
+            );
+
+
+            if (!$created) {
                 throw new Exception(
-                    'The barber already has an appointment during the selected time.'
+                    'Unable to create appointment.'
                 );
             }
+
+
+            /*
+             * Commit transaction
+             * This also releases the barber/date lock.
+             */
+            $this->appointmentRepository->commit();
+
+            return true;
+
+        } catch (\Throwable $e) {
+
+            /*
+             * Roll back transaction
+             * This releases the barber/date lock and ensures
+             * no partial appointment is left behind.
+             */
+            $this->appointmentRepository->rollback();
+
+            throw $e;
         }
-
-
-         // Prepare appointment data
-        $appointmentData = [
-            'customer_id' => $customerId,
-
-
-             //HOME appointments do not require a shop.
-
-            'shop_id' => $serviceLocation === 'SHOP'
-                ? $shop?->id
-                : null,
-
-            'barber_id' => $barber->id,
-
-            'service_id' => $serviceId,
-
-            'service_location' => $serviceLocation,
-
-            'duration_minutes' => $durationMinutes,
-
-            'appointment_date' => $date,
-
-            'appointment_time' => $time,
-        ];
-
-
-         //Create appointment
-        return $this->appointmentRepository->create(
-            $appointmentData
-        );
     }
 }

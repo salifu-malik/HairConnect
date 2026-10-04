@@ -18,15 +18,18 @@ class BarberService
     public function __construct(
         BarberRepository $barberRepository,
         ShopRepository $shopRepository,
-        UserRepository $userRepository
+        UserRepository $userRepository,
+        SubscriptionGuard $subscriptionGuard
     ) {
-        $this->barberRepository = $barberRepository;
-        $this->shopRepository = $shopRepository;
-        $this->userRepository = $userRepository;
-        $this->subscriptionGuard = $subscriptionGuard;
+        $this->barberService = new BarberService(
+            new BarberRepository(),
+            new ShopRepository(),
+            new UserRepository(),
+            new SubscriptionGuard()
+        );
     }
 
-//    Register a babrber without a shop(Indepent Barber)
+   //Register a babrber without a shop(Indepent Barber)
     public function registerIndependentBarber(
         int $userId,
         array $data
