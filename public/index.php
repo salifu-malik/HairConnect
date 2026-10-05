@@ -290,13 +290,45 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
     // QUEUE ROUTES
 
-} elseif ($requestUri === '/api/queues' && $requestMethod === 'POST') {
-
+// Customer: join walk-in queue
+} elseif (
+    $requestUri === '/api/queues' && $requestMethod === 'POST') {
     (new QueueController())->joinQueue();
 
-} elseif ($requestUri === '/api/queues/my' && $requestMethod === 'GET') {
-
+// Customer: view own active queue
+} elseif (
+    $requestUri === '/api/queues/my' && $requestMethod === 'GET') {
     (new QueueController())->getMyQueue();
+
+// Shop owner: view shop queue
+} elseif (
+    $requestUri === '/api/shop-owner/queues' && $requestMethod === 'GET') {
+    (new QueueController())->getShopQueue();
+
+// Shop owner: start queue entry
+} elseif (
+    preg_match(
+        '#^/api/shop-owner/queues/([0-9]+)/start$#', $requestUri, $matches) && $requestMethod === 'PATCH') {
+    (new QueueController())->startQueue(
+        (int) $matches[1]
+    );
+
+// Shop owner: complete queue entry
+} elseif (
+    preg_match(
+        '#^/api/shop-owner/queues/([0-9]+)/complete$#', $requestUri, $matches) && $requestMethod === 'PATCH') {
+    (new QueueController())->completeQueue(
+        (int) $matches[1]
+    );
+
+// Shop owner: cancel queue entry
+} elseif (
+    preg_match(
+        '#^/api/shop-owner/queues/([0-9]+)/cancel$#', $requestUri, $matches) && $requestMethod === 'PATCH') {
+    (new QueueController())->cancelQueue(
+        (int) $matches[1]
+    );
+
 
     //STORE ROUTES
 } elseif ($requestUri === '/api/products' && $requestMethod === 'GET') {
