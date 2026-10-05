@@ -194,6 +194,102 @@ class QueueRepository
     }
 
     /**
+     * Get all active queue entries for a shop.
+     *
+     * Active means waiting or currently in progress.
+     */
+    public function findActiveByShop(int $shopId): array
+    {
+        $stmt = $this->db->prepare("
+        SELECT
+            id,
+            shop_id,
+            customer_id,
+            queue_number,
+            status,
+            created_at,
+            updated_at
+        FROM queues
+        WHERE shop_id = :shop_id
+          AND status IN ('waiting', 'in_progress')
+        ORDER BY queue_number ASC
+    ");
+
+        $stmt->execute([
+            'shop_id' => $shopId,
+        ]);
+
+        return $stmt->fetchAll();
+    }
+
+
+    /**
+     * Move a waiting queue entry to in_progress.
+     */
+    public function start(int $queueId): bool
+    {
+        $stmt = $this->db->prepare("
+        UPDATE queues
+        SET
+            status = 'in_progress',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = :id
+          AND status = 'waiting'
+    ");
+
+        $stmt->execute([
+            'id' => $queueId,
+        ]);
+
+        return $stmt->rowCount() > 0;
+    }
+
+
+    /**
+     * Move an in-progress queue entry to completed.
+     */
+    public function complete(int $queueId): bool
+    {
+        $stmt = $this->db->prepare("
+        UPDATE queues
+        SET
+            status = 'completed',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = :id
+          AND status = 'in_progress'
+    ");
+
+        $stmt->execute([
+            'id' => $queueId,
+        ]);
+
+        return $stmt->rowCount() > 0;
+    }
+
+
+    /**
+     * Cancel a waiting queue entry.
+     */
+    public function cancel(int $queueId): bool
+    {
+        $stmt = $this->db->prepare("
+        UPDATE queues
+        SET
+            status = 'cancelled',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = :id
+          AND status = 'waiting'
+    ");
+
+        $stmt->execute([
+            'id' => $queueId,
+        ]);
+
+        return $stmt->rowCount() > 0;
+    }
+
+
+    /**
      * Commit database transaction.
      */
     public function commit(): void
