@@ -8,6 +8,7 @@ use App\Repositories\BarberRepository;
 use App\Repositories\BarberScheduleRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
+use App\Exceptions\BookingConflictException;
 use DateTime;
 use Exception;
 
@@ -48,7 +49,7 @@ class BookingService
     public function createAppointment(
         array $data,
         int $customerId
-    ): bool {
+    ): ?string {
         // ---------------------------------------------------------
         // Validate required fields
         // ---------------------------------------------------------
@@ -199,9 +200,10 @@ class BookingService
                 );
 
             if ($existingCustomerAppointment) {
-                throw new Exception(
+                throw new BookingConflictException(
                     'You already have an active appointment. Please complete or cancel it before booking another appointment.'
                 );
+
             }
 
 // -----------------------------------------------------
@@ -224,12 +226,15 @@ class BookingService
             // Prepare appointment
             // -----------------------------------------------------
 
+            $bookingCode = null;
+
+            if ($serviceLocation === 'SHOP') {
+                $bookingCode = $this->generateBookingCode();
+            }
+
             $appointmentData = [
                 'customer_id' => $customerId,
 
-                /*
-                 * HOME appointments do not require a shop.
-                 */
                 'shop_id' => $serviceLocation === 'SHOP'
                     ? $shop?->id
                     : null,
@@ -240,6 +245,8 @@ class BookingService
                 'duration_minutes' => $durationMinutes,
                 'appointment_date' => $date,
                 'appointment_time' => $time,
+
+                'booking_code' => $bookingCode,
             ];
 
             // -----------------------------------------------------
@@ -262,7 +269,7 @@ class BookingService
 
             $this->appointmentRepository->commit();
 
-            return true;
+            return $bookingCode;
 
         } catch (\Throwable $e) {
             $this->appointmentRepository->rollback();
@@ -887,8 +894,8 @@ class BookingService
         );
 
         if ($appointmentStart < $scheduleStart) {
-            throw new Exception(
-                'The selected time is before the barber\'s working hours.'
+            throw new BookingConflictException(
+                'The selected time conflicts with another appointment.'
             );
         }
 
@@ -944,10 +951,17 @@ class BookingService
                 $appointmentStart < $existingEnd &&
                 $appointmentEnd > $existingStart
             ) {
-                throw new Exception(
+                throw new BookingConflictException(
                     'The barber is already booked during the selected time.'
                 );
             }
         }
     }
+
+    private function generateBookingCode(): string
+    {
+        return (string) random_int(10000, 99999);
+    }
+
+
 }

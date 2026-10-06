@@ -23,27 +23,29 @@ class AppointmentRepository
     public function create(array $data): bool
     {
         $stmt = $this->db->prepare("
-            INSERT INTO appointments (
-                customer_id,
-                shop_id,
-                barber_id,
-                service_id,
-                service_location,
-                duration_minutes,
-                appointment_date,
-                appointment_time
-            )
-            VALUES (
-                :customer_id,
-                :shop_id,
-                :barber_id,
-                :service_id,
-                :service_location,
-                :duration_minutes,
-                :appointment_date,
-                :appointment_time
-            )
-        ");
+        INSERT INTO appointments (
+            customer_id,
+            shop_id,
+            barber_id,
+            service_id,
+            service_location,
+            duration_minutes,
+            appointment_date,
+            appointment_time,
+            booking_code
+        )
+        VALUES (
+            :customer_id,
+            :shop_id,
+            :barber_id,
+            :service_id,
+            :service_location,
+            :duration_minutes,
+            :appointment_date,
+            :appointment_time,
+            :booking_code
+        )
+    ");
 
         return $stmt->execute([
             'customer_id'      => $data['customer_id'],
@@ -54,9 +56,9 @@ class AppointmentRepository
             'duration_minutes' => $data['duration_minutes'],
             'appointment_date' => $data['appointment_date'],
             'appointment_time' => $data['appointment_time'],
+            'booking_code'     => $data['booking_code'] ?? null,
         ]);
     }
-
     /**
      * Find all active appointments for a barber on a specific date.
      *
@@ -115,6 +117,7 @@ class AppointmentRepository
                 a.appointment_date,
                 a.appointment_time,
                 a.status,
+                a.booking_code,
                 sh.name AS shop_name,
                 sh.location AS shop_location
             FROM appointments a

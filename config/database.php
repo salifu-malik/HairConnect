@@ -69,6 +69,12 @@ return [
             'user' => $_ENV['DB_USER'],
             'password' => $_ENV['DB_PASSWORD'],
         ],
+        'service_rendered_db' => [
+            'host' => $_ENV['DB_HOST'],
+            'dbname' => 'service_rendered_db',
+            'user' => $_ENV['DB_USER'],
+            'password' => $_ENV['DB_PASSWORD'],
+        ],
         // ... add other databases
     ]
 ];

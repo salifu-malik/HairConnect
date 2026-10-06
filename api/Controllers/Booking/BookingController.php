@@ -10,6 +10,7 @@ use App\Repositories\BarberScheduleRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
 use App\Services\BookingService;
+use App\Exceptions\BookingConflictException;
 
 class BookingController
 {
@@ -56,7 +57,7 @@ class BookingController
         }
 
         try {
-            $this->bookingService->createAppointment(
+            $bookingCode = $this->bookingService->createAppointment(
                 $data,
                 $customerId
             );
@@ -65,10 +66,22 @@ class BookingController
 
             echo json_encode([
                 'status' => 'success',
-                'message' => 'Appointment booked successfully.'
+                'message' => 'Appointment booked successfully.',
+                'data' => [
+                    'booking_code' => $bookingCode
+                ]
             ]);
 
-        } catch (\Exception $e) {
+        } catch (BookingConflictException $e) {
+
+            http_response_code(409);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+
+        } catch (\Throwable $e) {
 
             http_response_code(400);
 
