@@ -211,4 +211,69 @@ class BarberController
             ]);
         }
     }
+
+
+    public function getBarberAvailability(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        /*
+         * Availability is public information about a barber's
+         * schedule. We don't need CUSTOMER authentication here.
+         */
+
+        $barberId = isset($_GET['barber_id'])
+            ? (int) $_GET['barber_id']
+            : 0;
+
+        $date = isset($_GET['date'])
+            ? trim((string) $_GET['date'])
+            : '';
+
+        $serviceLocation = isset($_GET['service_location'])
+            ? trim((string) $_GET['service_location'])
+            : '';
+
+        try {
+
+            if ($barberId <= 0) {
+                throw new \Exception('Barber ID is required.');
+            }
+
+            if ($date === '') {
+                throw new \Exception('Date is required.');
+            }
+
+            if ($serviceLocation === '') {
+                throw new \Exception(
+                    'Service location is required.'
+                );
+            }
+
+            $availability = $this->bookingService
+                ->getBarberAvailability(
+                    $barberId,
+                    $date,
+                    $serviceLocation
+                );
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'data' => $availability
+            ]);
+
+        } catch (\Exception $e) {
+
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+
 }

@@ -4,6 +4,7 @@ namespace App\Repositories;
 
 use App\Models\User;
 use App\Helpers\DatabaseManager;
+
 use PDO;
 
 class UserRepository {

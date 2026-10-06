@@ -4,19 +4,23 @@ namespace App\Services;
 
 use App\Repositories\QueueRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\UserRepository;
 use App\Models\Shop;
 
 class QueueService
 {
     private QueueRepository $queueRepository;
     private ShopRepository $shopRepository;
+    private UserRepository $userRepository;
 
     public function __construct(
         QueueRepository $queueRepository,
-        ShopRepository $shopRepository
+        ShopRepository $shopRepository,
+        UserRepository $userRepository
     ) {
         $this->queueRepository = $queueRepository;
         $this->shopRepository = $shopRepository;
+        $this->userRepository = $userRepository;
     }
 
      //Verify that the authenticated user owns the specified shop.
@@ -212,13 +216,31 @@ class QueueService
         int $ownerId,
         int $shopId
     ): array {
-        $this->verifyShopOwnership(
-            $ownerId,
-            $shopId
-        );
+        if ($ownerId <= 0) {
+            throw new \RuntimeException('Invalid shop owner.');
+        }
 
-        return $this->queueRepository->findActiveByShop(
-            $shopId
+        if ($shopId <= 0) {
+            throw new \RuntimeException('Invalid shop.');
+        }
+
+        $shop = $this->shopRepository->findById($shopId);
+
+        if (!$shop) {
+            throw new \RuntimeException('Shop not found.');
+        }
+
+        if ((int) $shop->ownerId !== $ownerId) {
+            throw new \RuntimeException(
+                'You are not authorized to manage this shop queue.'
+            );
+        }
+
+        $queue = $this->queueRepository->findActiveByShop($shopId);
+
+        return array_map(
+            fn(array $entry): array => $this->enrichQueueEntry($entry),
+            $queue
         );
     }
 
@@ -276,7 +298,7 @@ class QueueService
             );
         }
 
-        return $updatedQueue;
+        return $this->enrichQueueEntry($updatedQueue);
     }
 
 
@@ -333,7 +355,7 @@ class QueueService
             );
         }
 
-        return $updatedQueue;
+        return $this->enrichQueueEntry($updatedQueue);
     }
 
 
@@ -393,6 +415,36 @@ class QueueService
             );
         }
 
-        return $updatedQueue;
+        return $this->enrichQueueEntry($updatedQueue);
     }
+
+
+    /**
+     * Add customer information to a queue entry.
+     */
+    private function enrichQueueEntry(array $queue): array
+    {
+        $customer = $this->userRepository->findById(
+            (int) $queue['customer_id']
+        );
+
+        if (!$customer) {
+            $queue['customer_name'] = 'Unknown Customer';
+            $queue['customer_phone'] = null;
+            $queue['customer_profile_image'] = null;
+
+            return $queue;
+        }
+
+        $queue['customer_name'] = trim(
+            $customer->firstName . ' ' . $customer->lastName
+        );
+
+        $queue['customer_phone'] = $customer->phone ?? null;
+        $queue['customer_profile_image'] = $customer->profileImage ?? null;
+
+        return $queue;
+    }
+
+
 }

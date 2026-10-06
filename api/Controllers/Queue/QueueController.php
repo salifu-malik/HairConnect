@@ -2,9 +2,12 @@
 
 namespace Api\Controllers\Queue;
 
+
+
 use Api\Middleware\AuthMiddleware;
 use App\Repositories\QueueRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\UserRepository;
 use App\Services\QueueService;
 
 class QueueController
@@ -15,7 +18,8 @@ class QueueController
     {
         $this->queueService = new QueueService(
             new QueueRepository(),
-            new ShopRepository()
+            new ShopRepository(),
+            new UserRepository()
         );
     }
 

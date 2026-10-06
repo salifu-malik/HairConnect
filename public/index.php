@@ -64,6 +64,8 @@ $subscriptionService = new SubscriptionService(
     new PaystackService()
 );
 
+
+
 $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
 error_log("DEBUG REQUEST URI: " . ($_SERVER['REQUEST_URI'] ?? ''));
@@ -280,13 +282,32 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     );
 
 
+// BOOKING AVAILABILITY
+} elseif (
+    $requestUri === '/api/bookings/availability'
+    && $requestMethod === 'GET'
+) {
+    (new BookingController())->getAvailableSlots();
 
-//BOOKING ROUTES
-} elseif ($requestUri === '/api/bookings' && $requestMethod === 'GET') {
+// BOOKING ROUTES
+} elseif (
+    $requestUri === '/api/bookings'
+    && $requestMethod === 'GET'
+) {
     (new BookingController())->getMyAppointments();
 
-} elseif ($requestUri === '/api/bookings' && $requestMethod === 'POST') {
+} elseif (
+    $requestUri === '/api/bookings'
+    && $requestMethod === 'POST'
+) {
     (new BookingController())->bookAppointment();
+
+// Shop owner: get appointments for owned shop
+} elseif (
+    $requestUri === '/api/shop-owner/bookings'
+    && $requestMethod === 'GET'
+) {
+    (new BookingController())->getShopOwnerAppointments();
 
     // QUEUE ROUTES
 
