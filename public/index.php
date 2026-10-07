@@ -365,6 +365,13 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
         (int) $matches[1]
     );
 
+    // Cancel appointment
+    if ($requestMethod === 'PATCH' && preg_match('#^/api/bookings/(\d+)/cancel$#', $requestUri, $matches)) {
+        $controller = new AppointmentController();
+        $controller->cancelAppointment((int)$matches[1]);
+        exit;
+    }
+
 
     // QUEUE ROUTES
 
