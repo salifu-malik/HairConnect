@@ -45,6 +45,9 @@ class BookingController
             true
         );
 
+//        error_log('BOOKING RAW DATA: ' . file_get_contents('php://input'));
+//        error_log('BOOKING DECODED DATA: ' . print_r($data, true));
+
         if (!is_array($data)) {
             http_response_code(400);
 

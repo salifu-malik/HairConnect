@@ -55,11 +55,11 @@ class BookingService
         // ---------------------------------------------------------
 
         if (
-            !isset($data['barberId']) ||
-            !isset($data['serviceId']) ||
-            !isset($data['serviceLocation']) ||
-            !isset($data['date']) ||
-            !isset($data['time'])
+            !isset($data['barber_id']) ||
+            !isset($data['service_id']) ||
+            !isset($data['service_location']) ||
+            !isset($data['appointment_date']) ||
+            !isset($data['appointment_time'])
         ) {
             throw new Exception(
                 'Barber, service, service location, date and time are required.'
@@ -74,15 +74,15 @@ class BookingService
         // Normalize input
         // ---------------------------------------------------------
 
-        $barberId = (int) $data['barberId'];
-        $serviceId = (int) $data['serviceId'];
+        $barberId = (int) $data['barber_id'];
+        $serviceId = (int) $data['service_id'];
 
         $serviceLocation = strtoupper(
-            trim((string) $data['serviceLocation'])
+            trim((string) $data['service_location'])
         );
 
-        $date = trim((string) $data['date']);
-        $time = trim((string) $data['time']);
+        $date = trim((string) $data['appointment_date']);
+        $time = trim((string) $data['appointment_time']);
 
         // ---------------------------------------------------------
         // Validate basic identifiers
@@ -106,7 +106,6 @@ class BookingService
         );
 
         $this->validateTime($time);
-
         // ---------------------------------------------------------
         // Validate barber and shop
         // ---------------------------------------------------------

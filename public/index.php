@@ -40,6 +40,7 @@ use Api\Controllers\Booking\BookingController;
 use Api\Controllers\Booking\BarberServiceController;
 use Api\Controllers\Barber\BarberDiscoveryController;
 use Api\Controllers\Queue\QueueController;
+use Api\Controllers\Appointment\AppointmentController;
 
 use App\Repositories\PlanRepository;
 use App\Repositories\PlanVersionRepository;
@@ -308,6 +309,62 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     && $requestMethod === 'GET'
 ) {
     (new BookingController())->getShopOwnerAppointments();
+
+
+    // APPOINTMENT LIFECYCLE ROUTES
+
+// Barber: confirm pending appointment
+} elseif (
+    preg_match(
+        '#^/api/barber/appointments/([0-9]+)/confirm$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'POST'
+) {
+    (new AppointmentController())->confirmAppointment(
+        (int) $matches[1]
+    );
+
+// Shop owner: check in confirmed appointment
+} elseif (
+    preg_match(
+        '#^/api/shop-owner/bookings/([0-9]+)/check-in$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'POST'
+) {
+    (new AppointmentController())->checkInAppointment(
+        (int) $matches[1]
+    );
+
+// Barber: start checked-in appointment
+} elseif (
+    preg_match(
+        '#^/api/barber/appointments/([0-9]+)/start$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'POST'
+) {
+    (new AppointmentController())->startAppointment(
+        (int) $matches[1]
+    );
+
+// Barber: complete appointment
+} elseif (
+    preg_match(
+        '#^/api/barber/appointments/([0-9]+)/complete$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'POST'
+) {
+    (new AppointmentController())->completeAppointment(
+        (int) $matches[1]
+    );
+
 
     // QUEUE ROUTES
 

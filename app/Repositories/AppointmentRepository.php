@@ -160,6 +160,29 @@ class AppointmentRepository
     }
 
 
+    /**
+     * Cancel an appointment.
+     * Allowed transitions:
+     * pending → cancelled
+     * confirmed → cancelled
+     */
+    public function cancelAppointment(int $appointmentId): bool
+    {
+        $stmt = $this->db->prepare("
+        UPDATE appointments
+        SET
+            status = 'cancelled'
+        WHERE id = :appointment_id
+          AND status IN ('pending', 'confirmed')
+    ");
+
+        $stmt->execute([
+            'appointment_id' => $appointmentId,
+        ]);
+
+        return $stmt->rowCount() === 1;
+    }
+
 
     /**
      * Check in a confirmed appointment.
@@ -201,19 +224,28 @@ class AppointmentRepository
      */
     public function startAppointment(int $appointmentId): bool
     {
-        $stmt = $this->db->prepare("
+        $sql = "
         UPDATE appointments
-        SET
-            status = 'in_progress'
-        WHERE id = :appointment_id
-          AND status = 'checked_in'
-    ");
+        SET status = 'in_progress'
+        WHERE id = :id
+          AND (
+                (
+                    service_location = 'SHOP'
+                    AND status = 'checked_in'
+                )
+                OR
+                (
+                    service_location = 'HOME'
+                    AND status = 'confirmed'
+                )
+          )
+    ";
 
-        $stmt->execute([
-            'appointment_id' => $appointmentId,
+        $stmt = $this->db->prepare($sql);
+
+        return $stmt->execute([
+            ':id' => $appointmentId
         ]);
-
-        return $stmt->rowCount() === 1;
     }
 
 

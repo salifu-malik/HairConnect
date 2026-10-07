@@ -129,10 +129,8 @@ class AppointmentService
      * Only the barber assigned to the appointment
      * can start it.
      */
-    public function startAppointment(
-        int $appointmentId,
-        int $userId
-    ): void {
+    public function startAppointment(int $appointmentId, int $userId): void
+    {
         $appointment = $this->getAppointment($appointmentId);
 
         $barber = $this->barberRepository->findByUserId($userId);
@@ -141,20 +139,34 @@ class AppointmentService
             throw new Exception('Barber profile not found.');
         }
 
-        if ((int) $appointment['barber_id'] !== (int) $barber->id) {
+        if ((int)$appointment['barber_id'] !== (int)$barber->id) {
             throw new Exception(
                 'You are not authorized to start this appointment.'
             );
         }
 
-        if ($appointment['status'] !== 'checked_in') {
-            throw new Exception(
-                'Only checked-in appointments can be started.'
-            );
+        $serviceLocation = strtoupper($appointment['service_location']);
+        $status = $appointment['status'];
+
+        if ($serviceLocation === 'SHOP') {
+            if ($status !== 'checked_in') {
+                throw new Exception(
+                    'Shop appointments must be checked in before they can be started.'
+                );
+            }
+        } elseif ($serviceLocation === 'HOME') {
+            if ($status !== 'confirmed') {
+                throw new Exception(
+                    'Only confirmed home appointments can be started.'
+                );
+            }
+        } else {
+            throw new Exception('Invalid appointment service location.');
         }
 
-        $updated = $this->appointmentRepository
-            ->startAppointment($appointmentId);
+        $updated = $this->appointmentRepository->startAppointment(
+            $appointmentId
+        );
 
         if (!$updated) {
             throw new Exception(
@@ -162,6 +174,8 @@ class AppointmentService
             );
         }
     }
+
+
 
     /**
      * Complete an appointment.
