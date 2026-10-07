@@ -239,4 +239,31 @@ class AppointmentService
 
         return $appointment;
     }
+
+
+
+    public function cancelAppointment(int $appointmentId, int $userId): void
+    {
+        $appointment = $this->getAppointment($appointmentId);
+
+        if ((int)$appointment['customer_id'] !== $userId) {
+            throw new Exception(
+                'You are not authorized to cancel this appointment.'
+            );
+        }
+
+        if (!in_array($appointment['status'], ['pending', 'confirmed'], true)) {
+            throw new Exception(
+                'Only pending or confirmed appointments can be cancelled.'
+            );
+        }
+
+        $updated = $this->appointmentRepository->cancelAppointment($appointmentId);
+
+        if (!$updated) {
+            throw new Exception('Unable to cancel appointment.');
+        }
+    }
+
+
 }
