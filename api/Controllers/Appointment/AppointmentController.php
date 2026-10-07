@@ -170,4 +170,37 @@ class AppointmentController
             ]);
         }
     }
+
+
+    public function cancelAppointment(int $appointmentId): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        try {
+            $auth = AuthMiddleware::checkRole(['CUSTOMER']);
+            $userId = (int)$auth['user']->id;
+
+            $this->appointmentService->cancelAppointment(
+                $appointmentId,
+                $userId
+            );
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'Appointment cancelled successfully.'
+            ]);
+
+        } catch (Throwable $e) {
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+
 }
