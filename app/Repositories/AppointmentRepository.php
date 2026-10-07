@@ -83,8 +83,8 @@ class AppointmentRepository
                 status
             FROM appointments
             WHERE barber_id = :barber_id
-              AND appointment_date = :appointment_date
-              AND status IN ('pending', 'confirmed')
+            AND appointment_date = :appointment_date
+            AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')
             ORDER BY appointment_time ASC
         ");
 
@@ -95,6 +95,161 @@ class AppointmentRepository
 
         return $stmt->fetchAll();
     }
+
+
+
+    /**
+     * Find an appointment by ID.
+     */
+    public function findById(int $appointmentId): ?array
+    {
+        $stmt = $this->db->prepare("
+        SELECT
+            id,
+            customer_id,
+            shop_id,
+            barber_id,
+            service_id,
+            service_location,
+            duration_minutes,
+            appointment_date,
+            appointment_time,
+            status,
+            booking_code,
+            checked_in_at,
+            checked_in_by,
+            completed_at
+        FROM appointments
+        WHERE id = :appointment_id
+        LIMIT 1
+    ");
+
+        $stmt->execute([
+            'appointment_id' => $appointmentId,
+        ]);
+
+        $appointment = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $appointment ?: null;
+    }
+
+
+
+    /**
+     * Confirm a pending appointment.
+     *
+     * Allowed transition:
+     *
+     * pending → confirmed
+     */
+    public function confirmAppointment(int $appointmentId): bool
+    {
+        $stmt = $this->db->prepare("
+        UPDATE appointments
+        SET
+            status = 'confirmed'
+        WHERE id = :appointment_id
+          AND status = 'pending'
+    ");
+
+        $stmt->execute([
+            'appointment_id' => $appointmentId,
+        ]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+
+
+    /**
+     * Check in a confirmed appointment.
+     *
+     * Allowed transition:
+     *
+     * confirmed → checked_in
+     */
+    public function checkInAppointment(
+        int $appointmentId,
+        int $checkedInBy
+    ): bool {
+        $stmt = $this->db->prepare("
+        UPDATE appointments
+        SET
+            status = 'checked_in',
+            checked_in_at = CURRENT_TIMESTAMP,
+            checked_in_by = :checked_in_by
+        WHERE id = :appointment_id
+          AND status = 'confirmed'
+    ");
+
+        $stmt->execute([
+            'appointment_id' => $appointmentId,
+            'checked_in_by'  => $checkedInBy,
+        ]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+
+
+    /**
+     * Start the service for a checked-in appointment.
+     *
+     * Allowed transition:
+     *
+     * checked_in → in_progress
+     */
+    public function startAppointment(int $appointmentId): bool
+    {
+        $stmt = $this->db->prepare("
+        UPDATE appointments
+        SET
+            status = 'in_progress'
+        WHERE id = :appointment_id
+          AND status = 'checked_in'
+    ");
+
+        $stmt->execute([
+            'appointment_id' => $appointmentId,
+        ]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+
+
+
+
+
+    /**
+     * Complete an appointment.
+     *
+     * Allowed transition:
+     *
+     * in_progress → completed
+     *
+     * The completion timestamp is recorded by the database.
+     */
+    public function completeAppointment(int $appointmentId): bool
+    {
+        $stmt = $this->db->prepare("
+        UPDATE appointments
+        SET
+            status = 'completed',
+            completed_at = CURRENT_TIMESTAMP
+        WHERE id = :appointment_id
+          AND status = 'in_progress'
+    ");
+
+        $stmt->execute([
+            'appointment_id' => $appointmentId,
+        ]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+
+
 
     /**
      * Find all appointments belonging to a customer.
@@ -239,8 +394,8 @@ class AppointmentRepository
                 status
             FROM appointments
             WHERE barber_id = :barber_id
-              AND appointment_date = :appointment_date
-              AND status IN ('pending', 'confirmed')
+            AND appointment_date = :appointment_date
+            AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')
             ORDER BY appointment_time ASC
         ");
 
@@ -362,8 +517,8 @@ class AppointmentRepository
             appointment_time,
             status
         FROM appointments
-        WHERE customer_id = :customer_id
-          AND status IN ('pending', 'confirmed')
+       WHERE customer_id = :customer_id
+        AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')
         ORDER BY appointment_date ASC, appointment_time ASC
         LIMIT 1
     ");

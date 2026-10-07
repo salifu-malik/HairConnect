@@ -3,8 +3,8 @@
 namespace App\Services;
 
 use App\Models\ServiceRendered;
-use App\Repositories\ServiceRenderedRepository;
 use App\Repositories\AppointmentRepository;
+use App\Repositories\ServiceRenderedRepository;
 use Exception;
 
 class ServiceRenderedService
@@ -23,8 +23,10 @@ class ServiceRenderedService
     /**
      * Record a completed service from an appointment.
      *
-     * This method should only be called when an appointment
-     * has legitimately reached the completed state.
+     * The appointment must already be completed.
+     *
+     * $actualBarberId represents the barber who actually
+     * performed the service.
      */
     public function recordCompletedService(
         int $appointmentId,
@@ -52,13 +54,9 @@ class ServiceRenderedService
 
         /*
          * Retrieve the appointment.
-         *
-         * We expect the existing AppointmentRepository to provide
-         * a method for retrieving an appointment by ID.
          */
-        $appointment =
-            $this->appointmentRepository
-                ->findById($appointmentId);
+        $appointment = $this->appointmentRepository
+            ->findById($appointmentId);
 
         if (!$appointment) {
             throw new Exception('Appointment not found.');
@@ -68,51 +66,66 @@ class ServiceRenderedService
          * Only completed appointments can become
          * service-rendered records.
          */
-        if ($appointment->status !== 'completed') {
+        if ($appointment['status'] !== 'completed') {
             throw new Exception(
                 'Only completed appointments can be recorded as services rendered.'
             );
         }
 
         /*
-         * Validate the actual servicing barber.
-         *
-         * This is deliberately separate from the original
-         * appointment barber because reassignment may occur.
+         * Validate service location.
          */
-        if ($actualBarberId <= 0) {
-            throw new Exception('Invalid servicing barber.');
+        $serviceLocation = strtoupper(
+            trim($appointment['service_location'])
+        );
+
+        if (!in_array(
+            $serviceLocation,
+            ['SHOP', 'HOME'],
+            true
+        )) {
+            throw new Exception(
+                'Invalid appointment service location.'
+            );
         }
 
         /*
-         * A SHOP appointment should retain its shop.
-         * A HOME appointment does not belong to a shop
-         * for service-rendering purposes unless your business
-         * rules explicitly associate it with one.
+         * SHOP services must have a shop.
+         *
+         * HOME services may have no shop.
          */
         $shopId = null;
 
-        if ($appointment->serviceLocation === 'SHOP') {
-            $shopId = $appointment->shopId;
-
-            if ($shopId === null) {
+        if ($serviceLocation === 'SHOP') {
+            if (
+                !isset($appointment['shop_id']) ||
+                (int) $appointment['shop_id'] <= 0
+            ) {
                 throw new Exception(
                     'Shop appointment is missing a shop.'
                 );
             }
+
+            $shopId = (int) $appointment['shop_id'];
         }
 
         /*
-         * Build the completed-service record.
+         * Create the completed-service record.
+         *
+         * IMPORTANT:
+         * actualBarberId is used here instead of
+         * appointment['barber_id'].
+         *
+         * This allows future barber reassignment.
          */
         $serviceRendered = new ServiceRendered(
-            appointmentId: $appointment->id,
+            appointmentId: (int) $appointment['id'],
             shopId: $shopId,
             barberId: $actualBarberId,
-            customerId: $appointment->customerId,
-            serviceId: $appointment->serviceId,
-            serviceLocation: $appointment->serviceLocation,
-            serviceDate: $appointment->appointmentDate
+            customerId: (int) $appointment['customer_id'],
+            serviceId: (int) $appointment['service_id'],
+            serviceLocation: $serviceLocation,
+            serviceDate: $appointment['appointment_date']
         );
 
         return $this->serviceRenderedRepository
@@ -128,10 +141,15 @@ class ServiceRenderedService
         string $toDate,
         ?string $serviceLocation = null
     ): array {
+        if ($barberId <= 0) {
+            throw new Exception('Invalid barber.');
+        }
+
         $this->validateDateRange($fromDate, $toDate);
 
-        $serviceLocation =
-            $this->normalizeServiceLocation($serviceLocation);
+        $serviceLocation = $this->normalizeServiceLocation(
+            $serviceLocation
+        );
 
         return $this->serviceRenderedRepository
             ->findByBarberAndDateRange(
@@ -144,6 +162,10 @@ class ServiceRenderedService
 
     /**
      * Get services rendered within a shop.
+     *
+     * Optional filters:
+     * - barber
+     * - service location
      */
     public function getShopServices(
         int $shopId,
@@ -156,14 +178,15 @@ class ServiceRenderedService
             throw new Exception('Invalid shop.');
         }
 
-        $this->validateDateRange($fromDate, $toDate);
-
-        $serviceLocation =
-            $this->normalizeServiceLocation($serviceLocation);
-
         if ($barberId !== null && $barberId <= 0) {
             throw new Exception('Invalid barber.');
         }
+
+        $this->validateDateRange($fromDate, $toDate);
+
+        $serviceLocation = $this->normalizeServiceLocation(
+            $serviceLocation
+        );
 
         return $this->serviceRenderedRepository
             ->findByShopAndDateRange(
@@ -176,7 +199,7 @@ class ServiceRenderedService
     }
 
     /**
-     * Get barber service count.
+     * Count services rendered by a barber.
      */
     public function countBarberServices(
         int $barberId,
@@ -184,10 +207,15 @@ class ServiceRenderedService
         string $toDate,
         ?string $serviceLocation = null
     ): int {
+        if ($barberId <= 0) {
+            throw new Exception('Invalid barber.');
+        }
+
         $this->validateDateRange($fromDate, $toDate);
 
-        $serviceLocation =
-            $this->normalizeServiceLocation($serviceLocation);
+        $serviceLocation = $this->normalizeServiceLocation(
+            $serviceLocation
+        );
 
         return $this->serviceRenderedRepository
             ->countByBarberAndDateRange(
@@ -199,7 +227,7 @@ class ServiceRenderedService
     }
 
     /**
-     * Get shop service count.
+     * Count services rendered within a shop.
      */
     public function countShopServices(
         int $shopId,
@@ -212,14 +240,15 @@ class ServiceRenderedService
             throw new Exception('Invalid shop.');
         }
 
-        $this->validateDateRange($fromDate, $toDate);
-
-        $serviceLocation =
-            $this->normalizeServiceLocation($serviceLocation);
-
         if ($barberId !== null && $barberId <= 0) {
             throw new Exception('Invalid barber.');
         }
+
+        $this->validateDateRange($fromDate, $toDate);
+
+        $serviceLocation = $this->normalizeServiceLocation(
+            $serviceLocation
+        );
 
         return $this->serviceRenderedRepository
             ->countByShopAndDateRange(
@@ -234,21 +263,25 @@ class ServiceRenderedService
     /**
      * Normalize service location.
      *
-     * Returns null when no location filter was supplied.
+     * ALL or empty/null means no location filter.
      */
     private function normalizeServiceLocation(
         ?string $serviceLocation
     ): ?string {
         if (
             $serviceLocation === null ||
-            trim($serviceLocation) === '' ||
-            strtoupper(trim($serviceLocation)) === 'ALL'
+            trim($serviceLocation) === ''
         ) {
             return null;
         }
 
-        $serviceLocation =
-            strtoupper(trim($serviceLocation));
+        $serviceLocation = strtoupper(
+            trim($serviceLocation)
+        );
+
+        if ($serviceLocation === 'ALL') {
+            return null;
+        }
 
         if (!in_array(
             $serviceLocation,
@@ -280,13 +313,19 @@ class ServiceRenderedService
             $toDate
         );
 
-        if (!$from || $from->format('Y-m-d') !== $fromDate) {
+        if (
+            !$from ||
+            $from->format('Y-m-d') !== $fromDate
+        ) {
             throw new Exception(
                 'Invalid start date.'
             );
         }
 
-        if (!$to || $to->format('Y-m-d') !== $toDate) {
+        if (
+            !$to ||
+            $to->format('Y-m-d') !== $toDate
+        ) {
             throw new Exception(
                 'Invalid end date.'
             );
