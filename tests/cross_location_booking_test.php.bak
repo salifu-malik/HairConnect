@@ -1,0 +1,257 @@
+<?php
+
+require_once __DIR__ . '/../bootstrap.php';
+
+use App\Helpers\DatabaseManager;
+use App\Repositories\AppointmentRepository;
+use App\Repositories\BarberRepository;
+use App\Repositories\ShopRepository;
+use App\Repositories\ServiceRepository;
+use App\Repositories\SubscriptionRepository;
+use App\Repositories\BarberHomeServiceRepository;
+use App\Repositories\BarberScheduleRepository;
+use App\Services\BookingService;
+
+$db = DatabaseManager::getConnection('booking_db');
+
+$bookingService = new BookingService(
+    new ShopRepository(),
+    new BarberRepository(),
+    new ServiceRepository(),
+    new BarberHomeServiceRepository(),
+    new AppointmentRepository(),
+    new BarberScheduleRepository(),
+    new SubscriptionRepository()
+);
+
+$date = '2026-10-13'; // Tuesday
+$barberId = 1;
+$shopServiceId = 1;
+$homeServiceId = 1;
+
+$shopCustomerId = 6;
+$homeCustomerId = 11;
+
+$createdIds = [];
+$passed = 0;
+$failed = 0;
+
+function checkResult(string $description, bool $condition): void
+{
+    global $passed, $failed;
+
+    if ($condition) {
+        echo "[PASS] {$description}\n";
+        $passed++;
+    } else {
+        echo "[FAIL] {$description}\n";
+        $failed++;
+    }
+}
+
+function createTestBooking(
+    BookingService $service,
+    PDO $db,
+    array $data,
+    int $customerId,
+    array &$createdIds
+): mixed {
+    $beforeId = (int) $db->query(
+        "SELECT COALESCE(MAX(id), 0) FROM appointments"
+    )->fetchColumn();
+
+    $result = $service->createAppointment($data, $customerId);
+
+    $stmt = $db->prepare("
+        SELECT id
+        FROM appointments
+        WHERE customer_id = :customer_id
+          AND barber_id = :barber_id
+          AND appointment_date = :date
+          AND appointment_time = :time
+          AND service_location = :location
+          AND id > :before_id
+        ORDER BY id DESC
+        LIMIT 1
+    ");
+
+    $stmt->execute([
+        ':customer_id' => $customerId,
+        ':barber_id' => (int) $data['barber_id'],
+        ':date' => $data['appointment_date'],
+        ':time' => $data['appointment_time'] . ':00',
+        ':location' => $data['service_location'],
+        ':before_id' => $beforeId,
+    ]);
+
+    $id = (int) $stmt->fetchColumn();
+
+    if ($id > 0) {
+        $createdIds[] = [
+            'id' => $id,
+            'customer_id' => $customerId,
+            'barber_id' => (int) $data['barber_id'],
+            'date' => $data['appointment_date'],
+            'time' => $data['appointment_time'] . ':00',
+            'location' => $data['service_location'],
+        ];
+    }
+
+    return $result;
+}
+try {
+// Test 1: Create a SHOP appointment from 10:00 to 11:00.
+    createTestBooking(
+        $bookingService,
+        $db,
+        [
+            'barber_id' => $barberId,
+            'service_id' => $shopServiceId,
+            'service_location' => 'SHOP',
+            'appointment_date' => $date,
+            'appointment_time' => '10:00',       ],
+        $shopCustomerId,
+        $createdIds
+    );
+
+    checkResult(
+        'SHOP booking at 10:00 was created',
+        count($createdIds) === 1
+    );
+
+    // Test 1B: A successful SHOP booking is automatically confirmed.
+    $shopBookingId = $createdIds[0]['id'] ?? null;
+
+    $shopBookingStatus = null;
+
+    if ($shopBookingId !== null) {
+        $stmt = $db->prepare("
+        SELECT status
+        FROM appointments
+        WHERE id = :id
+    ");
+
+        $stmt->execute([':id' => $shopBookingId]);
+        $shopBookingStatus = $stmt->fetchColumn();
+    }
+
+    checkResult(
+        'SHOP booking is automatically confirmed',
+        $shopBookingStatus === 'confirmed'
+    );
+
+    // Test 2: Attempt a HOME appointment starting at 10:30.
+    $overlapRejected = false;
+
+    try {
+        createTestBooking(
+            $bookingService,
+            $db,
+            [
+                'barber_id' => $barberId,
+                'service_id' => $homeServiceId,
+                'service_location' => 'HOME',
+                'appointment_date' => $date,
+                'appointment_time' => '10:30',           ],
+            $homeCustomerId,
+            $createdIds
+        );
+    } catch (Throwable $e) {
+        $overlapRejected = true;
+        echo "[INFO] Overlapping HOME booking rejected: "
+            . $e->getMessage() . "\n";
+    }
+
+    checkResult(
+        'Overlapping HOME booking at 10:30 was rejected',
+        $overlapRejected
+    );
+
+    // Test 3: HOME appointment at 18:00 should be allowed.
+    $homeBookingCreated = false;
+
+    try {
+        createTestBooking(
+            $bookingService,
+            $db,
+            [
+                'barber_id' => $barberId,
+                'service_id' => $homeServiceId,
+                'service_location' => 'HOME',
+                'appointment_date' => $date,
+                'appointment_time' => '18:00',            ],
+            $homeCustomerId,
+            $createdIds
+        );
+
+        $homeBookingCreated = true;
+    } catch (Throwable $e) {
+        echo "[INFO] 18:00 HOME booking failed: "
+            . $e->getMessage() . "\n";
+    }
+
+    checkResult(
+        'HOME booking at 18:00 was accepted',
+        $homeBookingCreated
+    );
+
+    // Test 3B: A successful HOME booking is automatically confirmed.
+    $homeBooking = null;
+
+    foreach ($createdIds as $booking) {
+        if ($booking['location'] === 'HOME') {
+            $homeBooking = $booking;
+            break;
+        }
+    }
+
+    $homeBookingStatus = null;
+
+    if ($homeBooking !== null) {
+        $stmt = $db->prepare("
+        SELECT status
+        FROM appointments
+        WHERE id = :id
+    ");
+
+        $stmt->execute([':id' => $homeBooking['id']]);
+        $homeBookingStatus = $stmt->fetchColumn();
+    }
+
+    checkResult(
+        'HOME booking is automatically confirmed',
+        $homeBookingStatus === 'confirmed'
+    );
+
+} catch (Throwable $e) {
+    echo "[ERROR] Test setup failed: " . $e->getMessage() . "\n";
+    $failed++;
+} finally {
+    // Remove only rows created and recorded by this test.
+    foreach (array_reverse($createdIds) as $booking) {
+        $stmt = $db->prepare("
+            DELETE FROM appointments
+            WHERE id = :id
+              AND customer_id = :customer_id
+              AND barber_id = :barber_id
+              AND appointment_date = :date
+              AND appointment_time = :time
+              AND service_location = :location
+        ");
+
+        $stmt->execute([
+            ':id' => $booking['id'],
+            ':customer_id' => $booking['customer_id'],
+            ':barber_id' => $booking['barber_id'],
+            ':date' => $booking['date'],
+            ':time' => $booking['time'],
+            ':location' => $booking['location'],
+        ]);
+
+        if ($stmt->rowCount() === 1) {
+            echo "[CLEANUP] Removed test appointment {$booking['id']}\n";
+        }
+    }
+
+    echo "\nResults: {$passed} passed, {$failed} failed\n";
+}

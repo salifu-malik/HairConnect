@@ -18,7 +18,8 @@ class BarberController
         $this->barberService = new BarberService(
             new BarberRepository(),
             new ShopRepository(),
-            new UserRepository()
+            new UserRepository(),
+            new SubscriptionGuard()
         );
     }
 

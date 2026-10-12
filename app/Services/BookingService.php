@@ -8,6 +8,7 @@ use App\Repositories\BarberRepository;
 use App\Repositories\BarberScheduleRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\SubscriptionRepository;
 use App\Exceptions\BookingConflictException;
 use DateTime;
 use Exception;
@@ -20,6 +21,7 @@ class BookingService
     private BarberHomeServiceRepository $barberHomeServiceRepository;
     private AppointmentRepository $appointmentRepository;
     private BarberScheduleRepository $barberScheduleRepository;
+    private SubscriptionRepository $subscriptionRepository;
 
     public function __construct(
         ShopRepository $shopRepository,
@@ -27,7 +29,8 @@ class BookingService
         ServiceRepository $serviceRepository,
         BarberHomeServiceRepository $barberHomeServiceRepository,
         AppointmentRepository $appointmentRepository,
-        BarberScheduleRepository $barberScheduleRepository
+        BarberScheduleRepository $barberScheduleRepository,
+        SubscriptionRepository $subscriptionRepository
     ) {
         $this->shopRepository = $shopRepository;
         $this->barberRepository = $barberRepository;
@@ -35,6 +38,7 @@ class BookingService
         $this->barberHomeServiceRepository = $barberHomeServiceRepository;
         $this->appointmentRepository = $appointmentRepository;
         $this->barberScheduleRepository = $barberScheduleRepository;
+        $this->subscriptionRepository = $subscriptionRepository;
     }
 
     /**
@@ -106,6 +110,27 @@ class BookingService
         );
 
         $this->validateTime($time);
+
+// ---------------------------------------------------------
+// Validate appointment start time against Ghana local time
+// ---------------------------------------------------------
+
+        $timezone = new DateTimeZone('Africa/Accra');
+
+        $appointmentStart = new DateTimeImmutable(
+            $date . ' ' . $time,
+            $timezone
+        );
+
+        $now = new DateTimeImmutable('now', $timezone);
+
+        if ($appointmentStart <= $now) {
+            throw new BookingConflictException(
+                'This appointment time has already passed or has started. Please select a future time.'
+            );
+        }
+
+        $this->validateTime($time);
         // ---------------------------------------------------------
         // Validate barber and shop
         // ---------------------------------------------------------
@@ -150,11 +175,7 @@ class BookingService
         // Validate appointment time against schedule
         // ---------------------------------------------------------
 
-        $appointmentStart = new DateTime(
-            $date . ' ' . $time . ':00'
-        );
-
-        $appointmentEnd = (clone $appointmentStart)->modify(
+        $appointmentEnd = $appointmentStart->modify(
             '+' . $durationMinutes . ' minutes'
         );
 
@@ -182,6 +203,21 @@ class BookingService
                 $barber->id,
                 $date
             );
+
+            // ---------------------------------------------------------
+            // Revalidate appointment time after acquiring the lock
+            // ---------------------------------------------------------
+
+            $now = new DateTimeImmutable(
+                'now',
+                new DateTimeZone('Africa/Accra')
+            );
+
+            if ($appointmentStart <= $now) {
+                throw new BookingConflictException(
+                    'This appointment time has already passed or has started. Please select a future time.'
+                );
+            }
 
             /*
              * IMPORTANT:
@@ -245,6 +281,7 @@ class BookingService
                 'appointment_date' => $date,
                 'appointment_time' => $time,
 
+                'status' => 'confirmed',
                 'booking_code' => $bookingCode,
             ];
 
@@ -458,6 +495,7 @@ class BookingService
             'You cannot view availability for a past date.'
         );
 
+        $timezone = new DateTimeZone('Africa/Accra');
         // ---------------------------------------------------------
         // Validate barber and shop
         // ---------------------------------------------------------
@@ -501,11 +539,13 @@ class BookingService
         }
 
         $scheduleStart = new DateTime(
-            $date . ' ' . $schedule['start_time']
+            $date . ' ' . $schedule['start_time'],
+            $timezone
         );
 
         $scheduleEnd = new DateTime(
-            $date . ' ' . $schedule['end_time']
+            $date . ' ' . $schedule['end_time'],
+            $timezone
         );
 
         // ---------------------------------------------------------
@@ -532,8 +572,7 @@ class BookingService
 
         $slot = clone $scheduleStart;
 
-        $now = new DateTime();
-
+        $now = new DateTime('now', $timezone);
         while (true) {
             $slotStart = clone $slot;
 
@@ -550,13 +589,15 @@ class BookingService
             }
 
             /*
-             * Do not show times that have already passed today.
-             */
+            * Never offer a slot whose start time has arrived or passed.
+            *
+            * Use Ghana local time (Africa/Accra).
+            * This applies to today's slots only; future dates remain eligible
+            * for normal schedule and availability checks.
+              */
             if (
-                $dateObject->format('Y-m-d') ===
-                $now->format('Y-m-d')
-                &&
-                $slotStart < $now
+                $dateObject->format('Y-m-d') === $now->format('Y-m-d')
+                && $slotStart <= $now
             ) {
                 $slot->modify('+30 minutes');
                 continue;
@@ -572,7 +613,8 @@ class BookingService
                 $existingStart = new DateTime(
                     $appointment['appointment_date']
                     . ' '
-                    . $appointment['appointment_time']
+                    . $appointment['appointment_time'],
+                    $timezone
                 );
 
                 $existingEnd = (clone $existingStart)->modify(
@@ -717,6 +759,25 @@ class BookingService
             );
         }
 
+        /*
+         * Independent barbers are responsible for their own
+         * HairConnect subscription.
+         *
+         * Barbers working under a shop do not require an
+         * individual barber subscription because the shop
+         * owner holds the platform subscription.
+         */
+        if (
+            $barber->shopId === null
+            && !$this->subscriptionRepository->hasActiveSubscription(
+                $barber->userId
+            )
+        ) {
+            throw new Exception(
+                'This independent barber does not have an active subscription.'
+            );
+        }
+
         return $barber;
     }
 
@@ -751,6 +812,23 @@ class BookingService
             if ($shop->status !== 'active') {
                 throw new Exception(
                     'This shop is currently unavailable.'
+                );
+            }
+
+            /*
+ * Shop-based barbers rely on the shop owner's
+ * HairConnect subscription.
+ *
+ * The barber does not need an individual subscription
+ * while working under the shop.
+ */
+            if (
+                !$this->subscriptionRepository->hasActiveSubscription(
+                    $shop->ownerId
+                )
+            ) {
+                throw new Exception(
+                    'This shop owner does not have an active HairConnect subscription.'
                 );
             }
         }
@@ -961,6 +1039,9 @@ class BookingService
     {
         return (string) random_int(10000, 99999);
     }
+
+
+
 
 
 }

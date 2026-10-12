@@ -208,6 +208,35 @@ class QueueService
     }
 
 
+
+    /**
+     * Get the customer's most recently created active queue entry
+     * across all shops.
+     */
+    public function getMyActiveQueue(int $customerId): ?array
+    {
+        if ($customerId <= 0) {
+            throw new \RuntimeException('Invalid customer.');
+        }
+
+        $queue = $this->queueRepository->findActiveByCustomer(
+            $customerId
+        );
+
+        if (!$queue) {
+            return null;
+        }
+
+        $queue['position'] = $this->queueRepository->getCurrentPosition(
+            (int) $queue['shop_id'],
+            (int) $queue['queue_number']
+        );
+
+        return $queue;
+    }
+
+
+
     /**
      * Get the active queue for a shop.
      * Only the owner of the shop can manage its queue.

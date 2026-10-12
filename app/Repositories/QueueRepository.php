@@ -50,6 +50,45 @@ class QueueRepository
         return $queue ?: null;
     }
 
+
+
+
+    /**
+     * Find the customer's most recently created active queue entry
+     * across all shops.
+     *
+     * Active means waiting or currently in progress.
+     */
+    public function findActiveByCustomer(int $customerId): ?array
+    {
+        $stmt = $this->db->prepare("
+        SELECT
+            id,
+            shop_id,
+            customer_id,
+            queue_number,
+            status,
+            created_at,
+            updated_at
+        FROM queues
+        WHERE customer_id = :customer_id
+          AND status IN ('waiting', 'in_progress')
+        ORDER BY id DESC
+        LIMIT 1
+    ");
+
+        $stmt->execute([
+            'customer_id' => $customerId,
+        ]);
+
+        $queue = $stmt->fetch();
+
+        return $queue ?: null;
+    }
+
+
+
+
     /**
      * Lock the shop row.
      *

@@ -32,6 +32,7 @@ class AppointmentRepository
             duration_minutes,
             appointment_date,
             appointment_time,
+            status,
             booking_code
         )
         VALUES (
@@ -43,6 +44,7 @@ class AppointmentRepository
             :duration_minutes,
             :appointment_date,
             :appointment_time,
+            :status,
             :booking_code
         )
     ");
@@ -56,9 +58,13 @@ class AppointmentRepository
             'duration_minutes' => $data['duration_minutes'],
             'appointment_date' => $data['appointment_date'],
             'appointment_time' => $data['appointment_time'],
+            'status'           => $data['status'] ?? 'confirmed',
             'booking_code'     => $data['booking_code'] ?? null,
         ]);
     }
+
+
+
     /**
      * Find all active appointments for a barber on a specific date.
      *
@@ -243,9 +249,11 @@ class AppointmentRepository
 
         $stmt = $this->db->prepare($sql);
 
-        return $stmt->execute([
-            ':id' => $appointmentId
+        $stmt->execute([
+            ':id' => $appointmentId,
         ]);
+
+        return $stmt->rowCount() === 1;
     }
 
 
@@ -549,8 +557,18 @@ class AppointmentRepository
             appointment_time,
             status
         FROM appointments
-       WHERE customer_id = :customer_id
-        AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')
+        WHERE customer_id = :customer_id
+          AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')
+          AND (
+              appointment_date > CURDATE()
+              OR (
+                  appointment_date = CURDATE()
+                  AND ADDTIME(
+                      appointment_time,
+                      SEC_TO_TIME(duration_minutes * 60)
+                  ) > CURTIME()
+              )
+          )
         ORDER BY appointment_date ASC, appointment_time ASC
         LIMIT 1
     ");
@@ -563,6 +581,5 @@ class AppointmentRepository
 
         return $appointment ?: null;
     }
-
 
 }

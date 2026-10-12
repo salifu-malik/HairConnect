@@ -24,37 +24,40 @@ class BarberRepository
     {
         $this->redis->delete('barbers:discoverable');
     }
-
     /**
-     * Create an independent barber profile.
+     * Create an independent barber.
      *
-     * Independent barbers do not belong to a shop.
-     * They are immediately active for home services.
+     * Independent barbers:
+     * - Have no shop.
+     * - Require admin verification before becoming publicly visible.
+     * - Start as pending/inactive.
+     * - Can provide HOME services only after approval and activation.
+     * - Require an active subscription before operating.
      */
     public function createIndependent(array $data): int
     {
         $stmt = $this->db->prepare("
-            INSERT INTO barbers (
-                user_id,
-                shop_id,
-                experience,
-                speciality,
-                approval_status,
-                status
-            )
-            VALUES (
-                :user_id,
-                NULL,
-                :experience,
-                :speciality,
-                'approved',
-                'active'
-            )
-        ");
+        INSERT INTO barbers (
+            user_id,
+            shop_id,
+            experience,
+            speciality,
+            approval_status,
+            status
+        )
+        VALUES (
+            :user_id,
+            NULL,
+            :experience,
+            :speciality,
+            'pending',
+            'inactive'
+        )
+    ");
 
         $stmt->execute([
-            'user_id' => $data['user_id'],
-            'experience' => $data['experience'] ?? 0,
+            'user_id'    => $data['user_id'],
+            'experience' => $data['experience'] ?? null,
             'speciality' => $data['speciality'] ?? null,
         ]);
 
@@ -252,6 +255,34 @@ class BarberRepository
 
         return $barbers;
     }
+
+
+    /**
+     * Find barbers waiting for admin verification.
+     *
+     * This includes independent barbers and barbers applying to shops.
+     * Shop owners still handle their separate shop-affiliation approval.
+     */
+    public function findPendingBarbers(): array
+    {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM barbers
+        WHERE approval_status = 'pending'
+        ORDER BY created_at ASC
+    ");
+
+        $stmt->execute();
+
+        $barbers = [];
+
+        foreach ($stmt->fetchAll() as $data) {
+            $barbers[] = new Barber($data);
+        }
+
+        return $barbers;
+    }
+
 
 
      //Update barber approval status.

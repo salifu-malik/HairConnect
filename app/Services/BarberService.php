@@ -21,15 +21,13 @@ class BarberService
         UserRepository $userRepository,
         SubscriptionGuard $subscriptionGuard
     ) {
-        $this->barberService = new BarberService(
-            new BarberRepository(),
-            new ShopRepository(),
-            new UserRepository(),
-            new SubscriptionGuard()
-        );
+        $this->barberRepository = $barberRepository;
+        $this->shopRepository = $shopRepository;
+        $this->userRepository = $userRepository;
+        $this->subscriptionGuard = $subscriptionGuard;
     }
 
-   //Register a babrber without a shop(Indepent Barber)
+    // Register a barber without a shop (Independent Barber)
     public function registerIndependentBarber(
         int $userId,
         array $data
@@ -37,13 +35,11 @@ class BarberService
         if ($userId <= 0) {
             throw new Exception('Invalid authenticated user.');
         }
-        $this->subscriptionGuard->requireActiveSubscription($userId);
 
-        if ($userId <= 0) {
-            throw new Exception('Invalid authenticated user.');
-        }
 
         $user = $this->userRepository->findById($userId);
+
+
 
         if (!$user) {
             throw new Exception('User not found.');
@@ -104,7 +100,6 @@ class BarberService
         if ($userId <= 0) {
             throw new Exception('Invalid authenticated user.');
         }
-        $this->subscriptionGuard->requireActiveSubscription($userId);
 
         if ($shopId <= 0) {
             throw new Exception('Invalid shop.');

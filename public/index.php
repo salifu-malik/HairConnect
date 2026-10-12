@@ -31,6 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../api/Controllers/Store/StoreController.php';
 
 use Api\Controllers\SubscriptionController;
 use Api\Controllers\Auth\AuthController;
@@ -41,6 +42,8 @@ use Api\Controllers\Booking\BarberServiceController;
 use Api\Controllers\Barber\BarberDiscoveryController;
 use Api\Controllers\Queue\QueueController;
 use Api\Controllers\Appointment\AppointmentController;
+use Api\Controllers\Barber\BarberController;
+use Api\Controllers\Store\StoreController;
 
 use App\Repositories\PlanRepository;
 use App\Repositories\PlanVersionRepository;
@@ -50,6 +53,7 @@ use App\Repositories\UserRepository;
 use App\Repositories\SubscriptionEventRepository;
 use App\Services\PaystackService;
 use App\Services\SubscriptionService;
+
 
 
 
@@ -71,13 +75,17 @@ $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
 error_log("DEBUG REQUEST URI: " . ($_SERVER['REQUEST_URI'] ?? ''));
 error_log("DEBUG PARSED URI: " . ($requestUri ?? ''));
-error_log("DEBUG METHOD: " . ($_SERVER['REQUEST_METHOD'] ?? ''));
 
-$projectPath = '/barber-backend/public';
+$projectPath = '/barber-backend';
 
 if (strpos($requestUri, $projectPath) === 0) {
     $requestUri = substr($requestUri, strlen($projectPath));
 }
+
+// Normalize the path to begin with /api/...
+$requestUri = '/' . ltrim($requestUri, '/');
+
+error_log("DEBUG NORMALIZED URI: " . $requestUri);
 
 $requestMethod = $_SERVER['REQUEST_METHOD'];
 
@@ -365,12 +373,18 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
         (int) $matches[1]
     );
 
-    // Cancel appointment
-    if ($requestMethod === 'PATCH' && preg_match('#^/api/bookings/(\d+)/cancel$#', $requestUri, $matches)) {
-        $controller = new AppointmentController();
-        $controller->cancelAppointment((int)$matches[1]);
-        exit;
-    }
+    // Customer: cancel appointment
+} elseif (
+    preg_match(
+        '#^/api/bookings/([0-9]+)/cancel$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'PATCH'
+) {
+    (new AppointmentController())->cancelAppointment(
+        (int) $matches[1]
+    );
 
 
     // QUEUE ROUTES
@@ -415,14 +429,24 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     );
 
 
-    //STORE ROUTES
-} elseif ($requestUri === '/api/products' && $requestMethod === 'GET') {
+    // STORE ROUTES
+} elseif (
+    $requestUri === '/api/products' &&
+    $requestMethod === 'GET'
+) {
+    (new \StoreController())->getProducts();
 
-    (new StoreController())->getProducts();
+} elseif (
+    $requestUri === '/api/orders' &&
+    $requestMethod === 'GET'
+) {
+    (new \StoreController())->getCustomerOrders();
 
-} elseif ($requestUri === '/api/orders' && $requestMethod === 'POST') {
-
-    (new StoreController())->placeOrder();
+} elseif (
+    $requestUri === '/api/orders' &&
+    $requestMethod === 'POST'
+) {
+    (new \StoreController())->placeOrder();
 
 
     // SUBSCRIPTION ROUTES
@@ -483,7 +507,7 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     (new SubscriptionController($subscriptionService))->updatePricingApproval();
 
 
-    // ADMIN ROUTES
+    // ADMIN SHOP ROUTES
 } elseif (
     $requestUri === '/api/admin/shops/pending'
     && $requestMethod === 'GET'
@@ -496,6 +520,25 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 ) {
     (new AdminController())->updateShopApproval((int) $matches[1]);
 
+
+    // ADMIN BARBER ROUTES
+} elseif (
+    $requestUri === '/api/admin/barbers/pending'
+    && $requestMethod === 'GET'
+) {
+    (new AdminController())->getPendingBarbers();
+
+} elseif (
+    preg_match(
+        '#^/api/admin/barbers/([0-9]+)/approval$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'PATCH'
+) {
+    (new AdminController())->updateBarberApproval(
+        (int) $matches[1]
+    );
 
     //404
 } else {

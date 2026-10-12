@@ -9,6 +9,7 @@ use App\Repositories\BarberRepository;
 use App\Repositories\BarberScheduleRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\SubscriptionRepository;
 use App\Services\BookingService;
 use App\Exceptions\BookingConflictException;
 
@@ -24,7 +25,8 @@ class BookingController
             new ServiceRepository(),
             new BarberHomeServiceRepository(),
             new AppointmentRepository(),
-            new BarberScheduleRepository()
+            new BarberScheduleRepository(),
+            new SubscriptionRepository()
         );
     }
 

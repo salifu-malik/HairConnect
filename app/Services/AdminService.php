@@ -2,21 +2,26 @@
 
 namespace App\Services;
 
+use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
 use App\Repositories\UserRepository;
 use Exception;
 
 class AdminService
 {
+
+    private BarberRepository $barberRepository;
     private ShopRepository $shopRepository;
     private UserRepository $userRepository;
 
     public function __construct(
         ShopRepository $shopRepository,
-        UserRepository $userRepository
+        UserRepository $userRepository,
+        BarberRepository $barberRepository
     ) {
         $this->shopRepository = $shopRepository;
         $this->userRepository = $userRepository;
+        $this->barberRepository = $barberRepository;
     }
 
 
@@ -78,4 +83,58 @@ class AdminService
             $adminId
         );
     }
+
+
+
+    /**
+     * Get barber profiles awaiting admin verification.
+     */
+    public function getPendingBarbers(int $adminId): array
+    {
+        $this->validateAdmin($adminId);
+
+        return $this->barberRepository->findPendingBarbers();
+    }
+
+    /**
+     * Approve or reject a pending barber profile.
+     */
+    public function updateBarberApproval(
+        int $adminId,
+        int $barberId,
+        string $approvalStatus
+    ): bool {
+        $this->validateAdmin($adminId);
+
+        if (!in_array($approvalStatus, ['approved', 'rejected'], true)) {
+            throw new Exception(
+                'Invalid approval status. Use approved or rejected.'
+            );
+        }
+
+        $barbers = $this->barberRepository->findPendingBarbers();
+
+        $pendingBarber = null;
+
+        foreach ($barbers as $barber) {
+            if ($barber->id === $barberId) {
+                $pendingBarber = $barber;
+                break;
+            }
+        }
+
+        if ($pendingBarber === null) {
+            throw new Exception(
+                'Barber not found or is no longer pending approval.'
+            );
+        }
+
+        return $this->barberRepository->updateApprovalStatus(
+            $barberId,
+            $approvalStatus,
+            $adminId
+        );
+    }
+
+
 }

@@ -15,6 +15,7 @@ class Barber
     public ?int $approvedBy;
 
     public string $status;
+    public ?string $createdAt;
 
     public function __construct(array $data)
     {
@@ -43,5 +44,8 @@ class Barber
 
         $this->status =
             $data['status'] ?? 'inactive';
+
+        $this->createdAt =
+            $data['created_at'] ?? null;
     }
 }

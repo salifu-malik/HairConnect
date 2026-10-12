@@ -174,4 +174,67 @@ class SubscriptionRepository
             'id' => $subscriptionId
         ]);
     }
+
+
+    public function hasActiveSubscription(int $userId): bool
+    {
+        $stmt = $this->db->prepare("
+        SELECT 1
+        FROM subscriptions
+        WHERE user_id = :user_id
+          AND status = 'active'
+          AND end_date > CURRENT_TIMESTAMP
+        LIMIT 1
+    ");
+
+        $stmt->execute([
+            'user_id' => $userId
+        ]);
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+
+    /**
+     * Return user IDs that currently have active subscriptions.
+     *
+     * A subscription must have active status and a future end date.
+     *
+     * @param int[] $userIds
+     * @return int[]
+     */
+    public function findUserIdsWithActiveSubscriptions(array $userIds): array
+    {
+        $userIds = array_values(array_unique(array_filter(
+            array_map('intval', $userIds),
+            static fn (int $id): bool => $id > 0
+        )));
+
+        if ($userIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(
+            ', ',
+            array_fill(0, count($userIds), '?')
+        );
+
+        $stmt = $this->db->prepare("
+        SELECT DISTINCT user_id
+        FROM subscriptions
+        WHERE user_id IN ($placeholders)
+          AND status = 'active'
+          AND end_date > CURRENT_TIMESTAMP
+    ");
+
+        $stmt->execute($userIds);
+
+        return array_map(
+            'intval',
+            $stmt->fetchAll(PDO::FETCH_COLUMN)
+        );
+    }
+
+
+
 }

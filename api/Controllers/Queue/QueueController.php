@@ -91,8 +91,15 @@ class QueueController
     }
 
     /**
-     * Get the authenticated customer's active queue at a shop.
+     * Get the authenticated customer's active queue.
+     *
      * CUSTOMER only.
+     *
+     * If shop_id is provided, retrieve the customer's queue
+     * at that specific shop.
+     *
+     * If shop_id is omitted, retrieve the customer's most
+     * recently created active queue across all shops.
      */
     public function getMyQueue(): void
     {
@@ -104,25 +111,31 @@ class QueueController
 
         $shopId = $_GET['shop_id'] ?? null;
 
-        if (
-            $shopId === null ||
-            !is_numeric($shopId)
-        ) {
-            http_response_code(400);
-
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Shop ID is required.'
-            ]);
-
-            return;
-        }
-
         try {
-            $queue = $this->queueService->getMyQueue(
-                $customerId,
-                (int) $shopId
-            );
+            if ($shopId !== null) {
+                if (
+                    !is_numeric($shopId) ||
+                    (int) $shopId <= 0
+                ) {
+                    http_response_code(400);
+
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'A valid shop ID is required.'
+                    ]);
+
+                    return;
+                }
+
+                $queue = $this->queueService->getMyQueue(
+                    $customerId,
+                    (int) $shopId
+                );
+            } else {
+                $queue = $this->queueService->getMyActiveQueue(
+                    $customerId
+                );
+            }
 
             http_response_code(200);
 
@@ -132,6 +145,9 @@ class QueueController
             ]);
 
         } catch (\Exception $e) {
+            error_log(
+                'Failed to retrieve customer queue: ' . $e->getMessage()
+            );
 
             http_response_code(400);
 

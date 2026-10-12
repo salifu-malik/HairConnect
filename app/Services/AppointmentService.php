@@ -64,17 +64,19 @@ class AppointmentService
     }
 
     /**
-     * Check in a shop appointment.
+     * Check in a confirmed shop appointment.
      *
-     * Only the owner of the appointment's shop
-     * can check the customer in.
+     * Only the owner of the appointment's shop can check
+     * the customer in, using the correct booking code.
      */
     public function checkInAppointment(
         int $appointmentId,
-        int $userId
+        int $userId,
+        string $bookingCode
     ): void {
         $appointment = $this->getAppointment($appointmentId);
 
+        // Only SHOP appointments can be checked in.
         if ($appointment['service_location'] !== 'SHOP') {
             throw new Exception(
                 'Only shop appointments can be checked in.'
@@ -87,6 +89,7 @@ class AppointmentService
             );
         }
 
+        // Confirm that the authenticated user owns the shop.
         $shops = $this->shopRepository->findByOwnerId($userId);
 
         $ownsShop = false;
@@ -104,17 +107,43 @@ class AppointmentService
             );
         }
 
+        // The appointment must be confirmed.
         if ($appointment['status'] !== 'confirmed') {
             throw new Exception(
                 'Only confirmed appointments can be checked in.'
             );
         }
 
-        $updated = $this->appointmentRepository
-            ->checkInAppointment(
-                $appointmentId,
-                $userId
+        // Validate the booking code.
+        $storedCode = (string) ($appointment['booking_code'] ?? '');
+
+        if (
+            $storedCode === ''
+            || !preg_match('/^\d{5}$/D', $storedCode)
+            || !hash_equals($storedCode, $bookingCode)
+        ) {
+            throw new Exception('Invalid booking code.');
+        }
+
+        // Check-in is not permitted before the appointment date.
+        $today = new \DateTimeImmutable(
+            'today',
+            new \DateTimeZone('Africa/Accra')
+        );
+
+        $appointmentDate = new \DateTimeImmutable(
+            $appointment['appointment_date'],
+            new \DateTimeZone('Africa/Accra')
+        );
+
+        if ($appointmentDate > $today) {
+            throw new Exception(
+                'Check-in is only allowed on the appointment date.'
             );
+        }
+
+        $updated = $this->appointmentRepository
+            ->checkInAppointment($appointmentId, $userId);
 
         if (!$updated) {
             throw new Exception(
@@ -145,16 +174,42 @@ class AppointmentService
             );
         }
 
+        $this->assertScheduledStartTimeReached($appointment);
+
         $serviceLocation = strtoupper($appointment['service_location']);
-        $status = $appointment['status'];
+        $status = strtolower($appointment['status']);
 
         if ($serviceLocation === 'SHOP') {
+            if ($status === 'in_progress') {
+                throw new Exception(
+                    'Appointment has already been started.'
+                );
+            }
+
+            if ($status === 'completed') {
+                throw new Exception(
+                    'Completed appointments cannot be started again.'
+                );
+            }
+
             if ($status !== 'checked_in') {
                 throw new Exception(
                     'Shop appointments must be checked in before they can be started.'
                 );
             }
         } elseif ($serviceLocation === 'HOME') {
+            if ($status === 'in_progress') {
+                throw new Exception(
+                    'Appointment has already been started.'
+                );
+            }
+
+            if ($status === 'completed') {
+                throw new Exception(
+                    'Completed appointments cannot be started again.'
+                );
+            }
+
             if ($status !== 'confirmed') {
                 throw new Exception(
                     'Only confirmed home appointments can be started.'
@@ -264,6 +319,34 @@ class AppointmentService
             throw new Exception('Unable to cancel appointment.');
         }
     }
+
+
+
+    /**
+     * Prevent an appointment from starting before its
+     * scheduled date and time.
+     */
+    private function assertScheduledStartTimeReached(
+        array $appointment
+    ): void {
+        $timezone = new \DateTimeZone('Africa/Accra');
+
+        $scheduledStart = new \DateTimeImmutable(
+            $appointment['appointment_date']
+            . ' '
+            . $appointment['appointment_time'],
+            $timezone
+        );
+
+        $now = new \DateTimeImmutable('now', $timezone);
+
+        if ($now < $scheduledStart) {
+            throw new Exception(
+                'The appointment cannot start before its scheduled date and time.'
+            );
+        }
+    }
+
 
 
 }
