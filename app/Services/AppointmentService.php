@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Repositories\AppointmentRepository;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
+use App\Repositories\NotificationRepository;
 use Exception;
 
 class AppointmentService
@@ -12,16 +14,44 @@ class AppointmentService
     private AppointmentRepository $appointmentRepository;
     private BarberRepository $barberRepository;
     private ShopRepository $shopRepository;
-
+    private CustomerBookingRestrictionRepository $restrictionRepository;
+    private ?NotificationRepository $notificationRepository;
     public function __construct(
         AppointmentRepository $appointmentRepository,
         BarberRepository $barberRepository,
-        ShopRepository $shopRepository
+        ShopRepository $shopRepository,
+        CustomerBookingRestrictionRepository $restrictionRepository,
+        ?NotificationRepository $notificationRepository = null
     ) {
         $this->appointmentRepository = $appointmentRepository;
         $this->barberRepository = $barberRepository;
         $this->shopRepository = $shopRepository;
+        $this->restrictionRepository = $restrictionRepository;
+        $this->notificationRepository = $notificationRepository;
     }
+
+    /**
+     * Get appointments assigned to the authenticated barber.
+     */
+    public function getBarberAppointments(int $userId): array
+    {
+        if ($userId <= 0) {
+            throw new \InvalidArgumentException(
+                'Invalid barber user.'
+            );
+        }
+
+        $barber = $this->barberRepository->findByUserId($userId);
+
+        if (!$barber) {
+            throw new Exception('Barber profile not found.');
+        }
+
+        return $this->appointmentRepository->findByBarber(
+            (int) $barber->id
+        );
+    }
+
 
     /**
      * Confirm a pending appointment.
@@ -299,9 +329,13 @@ class AppointmentService
 
     public function cancelAppointment(int $appointmentId, int $userId): void
     {
+        // ---------------------------------------------------------
+        // Verify appointment and ownership
+        // ---------------------------------------------------------
+
         $appointment = $this->getAppointment($appointmentId);
 
-        if ((int)$appointment['customer_id'] !== $userId) {
+        if ((int) $appointment['customer_id'] !== $userId) {
             throw new Exception(
                 'You are not authorized to cancel this appointment.'
             );
@@ -313,10 +347,146 @@ class AppointmentService
             );
         }
 
-        $updated = $this->appointmentRepository->cancelAppointment($appointmentId);
+        // ---------------------------------------------------------
+        // Calculate restriction dates using Ghana local time
+        // ---------------------------------------------------------
 
-        if (!$updated) {
-            throw new Exception('Unable to cancel appointment.');
+        $timezone = new \DateTimeZone('Africa/Accra');
+
+        $cancellationDate = new \DateTimeImmutable(
+            'now',
+            $timezone
+        );
+
+        $startDate = $cancellationDate->format('Y-m-d');
+
+        // Restrict the cancellation date and the next three days.
+        $endDate = $cancellationDate
+            ->modify('+3 days')
+            ->format('Y-m-d');
+
+        // ---------------------------------------------------------
+        // Cancel appointment and record restriction atomically
+        // ---------------------------------------------------------
+
+        $this->appointmentRepository->beginTransaction();
+
+        try {
+            $updated = $this->appointmentRepository
+                ->cancelAppointment($appointmentId);
+
+            if (!$updated) {
+                throw new Exception('Unable to cancel appointment.');
+            }
+
+            $restrictionCreated = $this->restrictionRepository
+                ->createCancellationRestriction(
+                    $userId,
+                    $startDate
+                );
+
+            if (!$restrictionCreated) {
+                throw new Exception(
+                    'Unable to record the booking restriction.'
+                );
+            }
+
+            $this->appointmentRepository->commit();
+
+        } catch (\Throwable $e) {
+            $this->appointmentRepository->rollback();
+
+            throw $e;
+        }
+
+        // ---------------------------------------------------------
+        // Notify the barber after the cancellation is committed
+        // ---------------------------------------------------------
+
+        try {
+            $barber = $this->barberRepository->findById(
+                (int) $appointment['barber_id']
+            );
+
+            if ($barber !== null) {
+                $this->sendCancellationNotification(
+                    (int) $barber->userId,
+                    'Appointment Cancelled',
+                    sprintf(
+                        'The appointment scheduled for %s at %s has been cancelled by the customer.',
+                        $appointment['appointment_date'],
+                        $appointment['appointment_time']
+                    )
+                );
+            }
+        } catch (\Throwable $notificationError) {
+            error_log(
+                'Barber cancellation notification failed: '
+                . $notificationError->getMessage()
+            );
+        }
+
+        // ---------------------------------------------------------
+        // Notify the shop owner for SHOP appointments
+        // ---------------------------------------------------------
+
+        if (
+            $appointment['service_location'] === 'SHOP'
+            && !empty($appointment['shop_id'])
+        ) {
+            try {
+                $shop = $this->shopRepository->findById(
+                    (int) $appointment['shop_id']
+                );
+
+                if ($shop !== null) {
+                    $this->sendCancellationNotification(
+                        (int) $shop->ownerId,
+                        'Shop Appointment Cancelled',
+                        sprintf(
+                            'An appointment at your shop scheduled for %s at %s has been cancelled by the customer.',
+                            $appointment['appointment_date'],
+                            $appointment['appointment_time']
+                        )
+                    );
+                }
+            } catch (\Throwable $notificationError) {
+                error_log(
+                    'Shop owner cancellation notification failed: '
+                    . $notificationError->getMessage()
+                );
+            }
+        }
+    }
+
+
+    /**
+     * Create a notification without allowing notification failures
+     * to affect the appointment operation.
+     */
+    private function sendCancellationNotification(
+        int $recipientUserId,
+        string $title,
+        string $message
+    ): void {
+        if ($recipientUserId <= 0) {
+            return;
+        }
+
+        try {
+            $this->notificationRepository ??= new NotificationRepository();
+
+            $this->notificationRepository->createNotification(
+                $recipientUserId,
+                $title,
+                $message,
+                'booking_cancelled'
+            );
+        } catch (\Throwable $notificationError) {
+            error_log(
+                'Appointment cancellation notification failed: '
+                . $notificationError->getMessage()
+            );
         }
     }
 

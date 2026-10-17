@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\Service;
+use App\Repositories\BarberRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
 use Exception;
@@ -11,13 +11,16 @@ class ShopOwnerServiceService
 {
     private ServiceRepository $serviceRepository;
     private ShopRepository $shopRepository;
+    private BarberRepository $barberRepository;
 
     public function __construct(
         ServiceRepository $serviceRepository,
-        ShopRepository $shopRepository
+        ShopRepository $shopRepository,
+        BarberRepository $barberRepository
     ) {
         $this->serviceRepository = $serviceRepository;
         $this->shopRepository = $shopRepository;
+        $this->barberRepository = $barberRepository;
     }
 
     /**
@@ -47,6 +50,35 @@ class ShopOwnerServiceService
 
         return $shop;
     }
+
+
+    /**
+     * Validate that an assigned barber belongs to the selected shop.
+     *
+     * A null barber ID means the service is available to all barbers
+     * in the shop.
+     */
+    private function validateBarberAssignment(
+        int $shopId,
+        ?int $barberId
+    ): void {
+        if ($barberId === null) {
+            return;
+        }
+
+        $barber = $this->barberRepository->findById($barberId);
+
+        if (!$barber) {
+            throw new Exception('Barber not found.');
+        }
+
+        if ($barber->shopId !== $shopId) {
+            throw new Exception(
+                'The selected barber does not belong to this shop.'
+            );
+        }
+    }
+
 
     /**
      * Verify that a service exists and belongs to a shop
@@ -196,20 +228,17 @@ class ShopOwnerServiceService
 
         $validated = $this->validateServiceData($data);
 
+        $barberId = $validated['barber_id'] ?? null;
+
+        $this->validateBarberAssignment($shopId, $barberId);
+
         $validated['shop_id'] = $shopId;
+        $validated['barber_id'] = $barberId;
 
-        if (!array_key_exists('barber_id', $validated)) {
-            $validated['barber_id'] = null;
-        }
-
-        if (!$this->serviceRepository->create($validated)) {
-            throw new Exception('Failed to create service.');
-        }
-
-        $serviceId = (int) $this->serviceRepository->getLastInsertId();
+        $serviceId = $this->serviceRepository->create($validated);
 
         if ($serviceId <= 0) {
-            throw new Exception('Service was created but its ID could not be retrieved.');
+            throw new Exception('Failed to create service.');
         }
 
         return $serviceId;
@@ -233,6 +262,11 @@ class ShopOwnerServiceService
         if (!array_key_exists('barber_id', $validated)) {
             $validated['barber_id'] = $service->barberId;
         }
+
+        $this->validateBarberAssignment(
+            $service->shopId,
+            $validated['barber_id']
+        );
 
         return $this->serviceRepository->update(
             $serviceId,

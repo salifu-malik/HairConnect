@@ -197,6 +197,29 @@ class BarberRepository
         return $barbers;
     }
 
+
+    /**
+     * Count approved and active barbers belonging to a shop.
+     */
+    public function countActiveByShopId(int $shopId): int
+    {
+        $stmt = $this->db->prepare("
+        SELECT COUNT(*)
+        FROM barbers
+        WHERE shop_id = :shop_id
+          AND approval_status = 'approved'
+          AND status = 'active'
+    ");
+
+        $stmt->execute([
+            'shop_id' => $shopId,
+        ]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+
+
     /**
      * Find all approved and active barbers that customers can discover.
      *

@@ -17,8 +17,8 @@ class AppointmentRepository
     /**
      * Create a new appointment.
      *
-     * The caller is responsible for validating the appointment
-     * and handling the booking transaction/locking.
+     * Home-service contact and address details are stored as an
+     * appointment-specific snapshot. Shop appointments do not need them.
      */
     public function create(array $data): bool
     {
@@ -33,9 +33,13 @@ class AppointmentRepository
             appointment_date,
             appointment_time,
             status,
-            booking_code
-        )
-        VALUES (
+            booking_code,
+            home_service_customer_name,
+            home_service_phone,
+            home_service_region,
+            home_service_address,
+            home_service_directions
+        ) VALUES (
             :customer_id,
             :shop_id,
             :barber_id,
@@ -45,21 +49,50 @@ class AppointmentRepository
             :appointment_date,
             :appointment_time,
             :status,
-            :booking_code
+            :booking_code,
+            :home_service_customer_name,
+            :home_service_phone,
+            :home_service_region,
+            :home_service_address,
+            :home_service_directions
         )
     ");
 
+        $isHomeService = strtoupper(
+                trim((string) ($data['service_location'] ?? ''))
+            ) === 'HOME';
+
         return $stmt->execute([
-            'customer_id'      => $data['customer_id'],
-            'shop_id'          => $data['shop_id'],
-            'barber_id'        => $data['barber_id'],
-            'service_id'       => $data['service_id'],
+            'customer_id' => $data['customer_id'],
+            'shop_id' => $data['shop_id'] ?? null,
+            'barber_id' => $data['barber_id'],
+            'service_id' => $data['service_id'],
             'service_location' => $data['service_location'],
             'duration_minutes' => $data['duration_minutes'],
             'appointment_date' => $data['appointment_date'],
             'appointment_time' => $data['appointment_time'],
-            'status'           => $data['status'] ?? 'confirmed',
-            'booking_code'     => $data['booking_code'] ?? null,
+            'status' => $data['status'] ?? 'confirmed',
+            'booking_code' => $data['booking_code'] ?? null,
+
+            'home_service_customer_name' => $isHomeService
+                ? ($data['home_service_customer_name'] ?? null)
+                : null,
+
+            'home_service_phone' => $isHomeService
+                ? ($data['home_service_phone'] ?? null)
+                : null,
+
+            'home_service_region' => $isHomeService
+                ? ($data['home_service_region'] ?? null)
+                : null,
+
+            'home_service_address' => $isHomeService
+                ? ($data['home_service_address'] ?? null)
+                : null,
+
+            'home_service_directions' => $isHomeService
+                ? ($data['home_service_directions'] ?? null)
+                : null,
         ]);
     }
 
@@ -298,42 +331,68 @@ class AppointmentRepository
     {
         $stmt = $this->db->prepare("
             SELECT
-                a.id,
-                a.customer_id,
-                a.shop_id,
-                a.barber_id,
-                CONCAT(u.first_name, ' ', u.last_name) AS barber_name,
-                u.profile_image AS barber_profile_image,
-                a.service_id,
-                s.name AS service_name,
-                s.price AS service_price,
-                a.service_location,
-                a.duration_minutes,
-                a.appointment_date,
-                a.appointment_time,
-                a.status,
-                a.booking_code,
-                sh.name AS shop_name,
-                sh.location AS shop_location
-            FROM appointments a
+        a.id,
+        a.customer_id,
+        a.shop_id,
+        a.barber_id,
 
-            INNER JOIN barbers b
-                ON a.barber_id = b.id
+        CONCAT(u.first_name, ' ', u.last_name) AS barber_name,
+        u.profile_image AS barber_profile_image,
 
-            INNER JOIN users_db.users u
-                ON b.user_id = u.id
+        a.service_id,
 
-            INNER JOIN services s
-                ON a.service_id = s.id
+        CASE
+            WHEN a.service_location = 'HOME'
+                THEN hs.name
+            ELSE s.name
+        END AS service_name,
 
-            LEFT JOIN shops sh
-                ON a.shop_id = sh.id
+        CASE
+            WHEN a.service_location = 'HOME'
+                THEN hs.price
+            ELSE s.price
+        END AS service_price,
 
-            WHERE a.customer_id = :customer_id
+        a.service_location,
+        a.duration_minutes,
+        a.appointment_date,
+        a.appointment_time,
+        a.status,
+        a.booking_code,
 
-            ORDER BY
-                a.appointment_date DESC,
-                a.appointment_time DESC
+        sh.name AS shop_name,
+        sh.location AS shop_location,
+
+        a.home_service_customer_name,
+        a.home_service_phone,
+        a.home_service_region,
+        a.home_service_address,
+        a.home_service_directions
+
+    FROM appointments a
+
+    INNER JOIN barbers b
+        ON a.barber_id = b.id
+
+    INNER JOIN users_db.users u
+        ON b.user_id = u.id
+
+    LEFT JOIN services s
+        ON a.service_location = 'SHOP'
+        AND a.service_id = s.id
+
+    LEFT JOIN barber_home_services hs
+        ON a.service_location = 'HOME'
+        AND a.service_id = hs.id
+
+    LEFT JOIN shops sh
+        ON a.shop_id = sh.id
+
+    WHERE a.customer_id = :customer_id
+
+    ORDER BY
+        a.appointment_date DESC,
+        a.appointment_time DESC
         ");
 
         $stmt->execute([
@@ -410,6 +469,106 @@ class AppointmentRepository
 
         return $stmt->fetchAll();
     }
+
+    /**
+     * Find all appointments assigned to a specific barber.
+     *
+     * Supports both SHOP and HOME appointments.
+     */
+    public function findByBarber(int $barberId): array
+    {
+        $stmt = $this->db->prepare("
+        SELECT
+            a.id,
+            a.customer_id,
+
+            CONCAT(cu.first_name, ' ', cu.last_name) AS customer_name,
+            cu.phone AS customer_phone,
+            cu.profile_image AS customer_profile_image,
+
+            a.shop_id,
+            a.barber_id,
+
+            a.service_id,
+
+            CASE
+                WHEN a.service_location = 'HOME'
+                    THEN hs.name
+                ELSE s.name
+            END AS service_name,
+
+            CASE
+                WHEN a.service_location = 'HOME'
+                    THEN hs.price
+                ELSE s.price
+            END AS service_price,
+
+            a.service_location,
+            a.duration_minutes,
+            a.appointment_date,
+            a.appointment_time,
+            a.status,
+            a.booking_code,
+
+            sh.name AS shop_name,
+            sh.location AS shop_location,
+
+            a.home_service_customer_name,
+            a.home_service_phone,
+            a.home_service_region,
+            a.home_service_address,
+            a.home_service_directions
+
+        FROM appointments a
+
+        INNER JOIN users_db.users cu
+            ON a.customer_id = cu.id
+
+        LEFT JOIN services s
+            ON a.service_location = 'SHOP'
+            AND a.service_id = s.id
+
+        LEFT JOIN barber_home_services hs
+            ON a.service_location = 'HOME'
+            AND a.service_id = hs.id
+
+        LEFT JOIN shops sh
+            ON a.shop_id = sh.id
+
+        WHERE a.barber_id = :barber_id
+
+        ORDER BY
+            a.appointment_date ASC,
+            a.appointment_time ASC
+    ");
+
+        $stmt->execute([
+            'barber_id' => $barberId,
+        ]);
+
+        return $stmt->fetchAll();
+    }
+
+
+
+    /**
+     * Count appointments belonging to a shop.
+     */
+    public function countByShop(int $shopId): int
+    {
+        $stmt = $this->db->prepare("
+        SELECT COUNT(*)
+        FROM appointments
+        WHERE shop_id = :shop_id
+    ");
+
+        $stmt->execute([
+            'shop_id' => $shopId,
+        ]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
 
     /**
      * Find all active/booked appointments for a barber on a date.
@@ -581,5 +740,92 @@ class AppointmentRepository
 
         return $appointment ?: null;
     }
+
+
+    /**
+     * Find confirmed shop appointments whose scheduled end time
+     * plus the shop's configured no-show grace period has elapsed.
+     *
+     * Only confirmed appointments are eligible.
+     * Cancelled, checked-in, in-progress and completed appointments
+     * are excluded.
+     */
+    public function findEligibleNoShowAppointments(
+        string $currentDateTime
+    ): array {
+        $stmt = $this->db->prepare("
+        SELECT
+            a.id AS appointment_id,
+            a.customer_id,
+            a.barber_id,
+            a.shop_id,
+            a.appointment_date,
+            a.appointment_time,
+            a.duration_minutes,
+            sh.owner_id,
+            sh.name AS shop_name,
+            sh.no_show_grace_minutes
+        FROM appointments a
+        INNER JOIN shops sh
+            ON sh.id = a.shop_id
+        WHERE a.service_location = 'SHOP'
+          AND a.status = 'confirmed'
+          AND a.checked_in_at IS NULL
+          AND a.duration_minutes > 0
+          AND TIMESTAMP(
+                a.appointment_date,
+                a.appointment_time
+              )
+              + INTERVAL a.duration_minutes MINUTE
+              + INTERVAL sh.no_show_grace_minutes MINUTE
+              <= :current_datetime
+        ORDER BY a.appointment_date ASC, a.appointment_time ASC
+    ");
+
+        $stmt->execute([
+            'current_datetime' => $currentDateTime,
+        ]);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Atomically mark an eligible shop appointment as a no-show.
+     *
+     * The conditional update protects appointments whose status
+     * changes after the candidate query.
+     */
+    public function markAppointmentAsNoShow(
+        int $appointmentId,
+        string $currentDateTime
+    ): bool {
+        $stmt = $this->db->prepare("
+        UPDATE appointments a
+        INNER JOIN shops sh
+            ON sh.id = a.shop_id
+        SET a.status = 'no_show'
+        WHERE a.id = :appointment_id
+          AND a.service_location = 'SHOP'
+          AND a.status = 'confirmed'
+          AND a.checked_in_at IS NULL
+          AND a.duration_minutes > 0
+          AND TIMESTAMP(
+                a.appointment_date,
+                a.appointment_time
+              )
+              + INTERVAL a.duration_minutes MINUTE
+              + INTERVAL sh.no_show_grace_minutes MINUTE
+              <= :current_datetime
+    ");
+
+        $stmt->execute([
+            'appointment_id' => $appointmentId,
+            'current_datetime' => $currentDateTime,
+        ]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+
 
 }

@@ -8,10 +8,15 @@ use App\Repositories\BarberRepository;
 use App\Repositories\BarberScheduleRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
 use App\Repositories\SubscriptionRepository;
+use App\Repositories\NotificationRepository;
 use App\Exceptions\BookingConflictException;
 use DateTime;
+use DateTimeImmutable;
+use DateTimeZone;
 use Exception;
+
 
 class BookingService
 {
@@ -20,8 +25,11 @@ class BookingService
     private ServiceRepository $serviceRepository;
     private BarberHomeServiceRepository $barberHomeServiceRepository;
     private AppointmentRepository $appointmentRepository;
+    private CustomerBookingRestrictionRepository $restrictionRepository;
     private BarberScheduleRepository $barberScheduleRepository;
     private SubscriptionRepository $subscriptionRepository;
+    private ?NotificationRepository $notificationRepository;
+//    private NotificationRepository $notificationRepository;
 
     public function __construct(
         ShopRepository $shopRepository,
@@ -30,7 +38,11 @@ class BookingService
         BarberHomeServiceRepository $barberHomeServiceRepository,
         AppointmentRepository $appointmentRepository,
         BarberScheduleRepository $barberScheduleRepository,
-        SubscriptionRepository $subscriptionRepository
+        SubscriptionRepository $subscriptionRepository,
+        CustomerBookingRestrictionRepository $restrictionRepository,
+        ?NotificationRepository $notificationRepository = null
+//        NotificationRepository $notificationRepository = new NotificationRepository()
+//        NotificationRepository $notificationRepository
     ) {
         $this->shopRepository = $shopRepository;
         $this->barberRepository = $barberRepository;
@@ -39,6 +51,8 @@ class BookingService
         $this->appointmentRepository = $appointmentRepository;
         $this->barberScheduleRepository = $barberScheduleRepository;
         $this->subscriptionRepository = $subscriptionRepository;
+        $this->restrictionRepository = $restrictionRepository;
+        $this->notificationRepository = $notificationRepository;
     }
 
     /**
@@ -87,6 +101,60 @@ class BookingService
 
         $date = trim((string) $data['appointment_date']);
         $time = trim((string) $data['appointment_time']);
+        $homeServiceDetails = [];
+
+        if ($serviceLocation === 'HOME') {
+            $homeServiceDetails = [
+                'home_service_customer_name' => trim(
+                    (string) ($data['home_service_customer_name'] ?? '')
+                ),
+                'home_service_phone' => trim(
+                    (string) ($data['home_service_phone'] ?? '')
+                ),
+                'home_service_region' => trim(
+                    (string) ($data['home_service_region'] ?? '')
+                ),
+                'home_service_address' => trim(
+                    (string) ($data['home_service_address'] ?? '')
+                ),
+                'home_service_directions' => trim(
+                    (string) ($data['home_service_directions'] ?? '')
+                ),
+            ];
+
+            foreach ([
+                         'home_service_customer_name' => 'Customer name',
+                         'home_service_phone' => 'Phone number',
+                         'home_service_region' => 'Region',
+                         'home_service_address' => 'Home address',
+                     ] as $field => $label) {
+                if ($homeServiceDetails[$field] === '') {
+                    throw new Exception(
+                        "{$label} is required for a home-service appointment."
+                    );
+                }
+            }
+
+            if (strlen($homeServiceDetails['home_service_customer_name']) > 201) {
+                throw new Exception('Customer name is too long.');
+            }
+
+            if (strlen($homeServiceDetails['home_service_phone']) > 20) {
+                throw new Exception('Phone number is too long.');
+            }
+
+            if (strlen($homeServiceDetails['home_service_region']) > 100) {
+                throw new Exception('Region is too long.');
+            }
+
+            if (strlen($homeServiceDetails['home_service_address']) > 500) {
+                throw new Exception('Home address is too long.');
+            }
+
+            if (strlen($homeServiceDetails['home_service_directions']) > 500) {
+                throw new Exception('Directions or landmark details are too long.');
+            }
+        }
 
         // ---------------------------------------------------------
         // Validate basic identifiers
@@ -117,12 +185,12 @@ class BookingService
 
         $timezone = new DateTimeZone('Africa/Accra');
 
-        $appointmentStart = new DateTimeImmutable(
+        $appointmentStart = new DateTime(
             $date . ' ' . $time,
             $timezone
         );
 
-        $now = new DateTimeImmutable('now', $timezone);
+        $now = new DateTime('now', $timezone);
 
         if ($appointmentStart <= $now) {
             throw new BookingConflictException(
@@ -175,7 +243,7 @@ class BookingService
         // Validate appointment time against schedule
         // ---------------------------------------------------------
 
-        $appointmentEnd = $appointmentStart->modify(
+        $appointmentEnd = (clone $appointmentStart)->modify(
             '+' . $durationMinutes . ' minutes'
         );
 
@@ -219,6 +287,33 @@ class BookingService
                 );
             }
 
+
+            // -----------------------------------------------------
+// Enforce customer cancellation restriction
+// -----------------------------------------------------
+
+            $activeRestriction =
+                $this->restrictionRepository->findActiveRestriction(
+                    $customerId
+                );
+
+            if ($activeRestriction !== null) {
+                $restrictionEndDate = new DateTimeImmutable(
+                    $activeRestriction['restriction_end_date'],
+                    new DateTimeZone('Africa/Accra')
+                );
+
+                $allowedBookingDate = $restrictionEndDate
+                    ->modify('+1 day')
+                    ->format('j F Y');
+
+                throw new BookingConflictException(
+                    "You cannot make a new booking because of a recent appointment cancellation. You can book again from {$allowedBookingDate}."
+                );
+            }
+
+
+
             /*
              * IMPORTANT:
              *
@@ -251,6 +346,8 @@ class BookingService
                     $date
                 );
 
+// Final barber conflict check.
+// Applies to every barber, date, and service location.
             $this->ensureNoAppointmentConflict(
                 $appointmentStart,
                 $appointmentEnd,
@@ -258,15 +355,11 @@ class BookingService
             );
 
             // -----------------------------------------------------
-            // Prepare appointment
-            // -----------------------------------------------------
+// Prepare appointment
+// -----------------------------------------------------
 
-            $bookingCode = null;
-
-            if ($serviceLocation === 'SHOP') {
-                $bookingCode = $this->generateBookingCode();
-            }
-
+// Generate a booking code for both SHOP and HOME appointments.
+            $bookingCode = $this->generateBookingCode();
             $appointmentData = [
                 'customer_id' => $customerId,
 
@@ -283,6 +376,20 @@ class BookingService
 
                 'status' => 'confirmed',
                 'booking_code' => $bookingCode,
+                'home_service_customer_name' =>
+                    $homeServiceDetails['home_service_customer_name'] ?? null,
+
+                'home_service_phone' =>
+                    $homeServiceDetails['home_service_phone'] ?? null,
+
+                'home_service_region' =>
+                    $homeServiceDetails['home_service_region'] ?? null,
+
+                'home_service_address' =>
+                    $homeServiceDetails['home_service_address'] ?? null,
+
+                'home_service_directions' =>
+                    $homeServiceDetails['home_service_directions'] ?? null,
             ];
 
             // -----------------------------------------------------
@@ -304,6 +411,118 @@ class BookingService
             // -----------------------------------------------------
 
             $this->appointmentRepository->commit();
+
+            error_log(
+                '[BOOKING NOTIFICATION DEBUG] '
+                . 'customerId=' . $customerId
+                . ', serviceLocation=' . $serviceLocation
+                . ', date=' . $date
+                . ', time=' . $time
+            );
+
+// Notify users after the appointment has been committed.
+            $notificationRepository = $this->notificationRepository;
+
+            if ($notificationRepository === null) {
+                try {
+                    $notificationRepository = new NotificationRepository();
+                } catch (\Throwable $notificationError) {
+                    error_log(
+                        'Booking notification repository initialization failed: '
+                        . $notificationError->getMessage()
+                    );
+                }
+            }
+
+// Notify the barber independently.
+            if ($notificationRepository !== null) {
+                $barberUserId = (int) $barber->userId;
+
+                if ($barberUserId > 0) {
+                    try {
+                        $notificationRepository->createNotification(
+                            $barberUserId,
+                            'New Appointment',
+                            sprintf(
+                                'A new %s appointment has been booked for %s at %s.',
+                                strtolower($serviceLocation),
+                                $date,
+                                $time
+                            ),
+                            'booking_created'
+                        );
+                    } catch (\Throwable $notificationError) {
+                        error_log(
+                            'Barber booking notification failed: '
+                            . $notificationError->getMessage()
+                        );
+                    }
+                }
+            }
+
+
+            // Notify the customer that the appointment was created.
+            if ($notificationRepository !== null) {
+                try {
+
+                    error_log(
+                        '[BOOKING NOTIFICATION DEBUG] Attempting customer notification '
+                        . 'for user ID ' . $customerId
+                    );
+
+                    $notificationRepository->createNotification(
+                        $customerId,
+                        'Booking Confirmed',
+                        sprintf(
+                            'Your %s appointment has been booked for %s at %s.',
+                            strtolower($serviceLocation),
+                            $date,
+                            $time
+                        ),
+                        'booking_created'
+                    );
+
+                    error_log(
+                        '[BOOKING NOTIFICATION DEBUG] Customer notification created '
+                        . 'for user ID ' . $customerId
+                    );
+
+                } catch (\Throwable $notificationError) {
+                    error_log(
+                        'Customer booking notification failed: '
+                        . $notificationError->getMessage()
+                    );
+                }
+            }
+
+// Notify the shop owner independently.
+            if (
+                $notificationRepository !== null
+                && $serviceLocation === 'SHOP'
+                && $shop !== null
+            ) {
+                $shopOwnerId = (int) $shop->ownerId;
+
+                if ($shopOwnerId > 0) {
+                    try {
+                        $notificationRepository->createNotification(
+                            $shopOwnerId,
+                            'New Shop Appointment',
+                            sprintf(
+                                'A new appointment has been booked for your shop on %s at %s.',
+                                $date,
+                                $time
+                            ),
+                            'booking_created'
+                        );
+                    } catch (\Throwable $notificationError) {
+                        error_log(
+                            'Shop owner booking notification failed: '
+                            . $notificationError->getMessage()
+                        );
+                    }
+                }
+            }
 
             return $bookingCode;
 
@@ -357,6 +576,38 @@ class BookingService
 
         return $this->appointmentRepository->findByShop($shopId);
     }
+
+
+    /**
+     * Get dashboard statistics for all shops owned by a user.
+     */
+    public function getShopOwnerDashboardStats(int $ownerId): array
+    {
+        if ($ownerId <= 0) {
+            throw new Exception('Invalid shop owner.');
+        }
+
+        $shops = $this->shopRepository->findByOwnerId($ownerId);
+
+        $bookingsCount = 0;
+        $barbersCount = 0;
+
+        foreach ($shops as $shop) {
+            $bookingsCount += $this->appointmentRepository
+                ->countByShop($shop->id);
+
+            $barbersCount += $this->barberRepository
+                ->countActiveByShopId($shop->id);
+        }
+
+        return [
+            'bookingsCount' => $bookingsCount,
+            'barbersCount' => $barbersCount,
+            'shopsCount' => count($shops),
+        ];
+    }
+
+
 
     /**
      * Get barber availability information.

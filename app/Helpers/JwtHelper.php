@@ -130,6 +130,7 @@ class JwtHelper
         $parts = explode('.', $token);
 
         if (count($parts) !== 3) {
+            error_log('JWT DEBUG: Invalid token structure. Parts: ' . count($parts));
             return null;
         }
 
@@ -144,10 +145,11 @@ class JwtHelper
         $header = json_decode($headerJson, true);
 
         if (!is_array($header)) {
+            error_log('JWT DEBUG: Invalid JWT header.');
             return null;
         }
-
         if (($header['alg'] ?? null) !== 'RS256') {
+            error_log('JWT DEBUG: Unexpected algorithm: ' . ($header['alg'] ?? 'missing'));
             return null;
         }
 
@@ -165,6 +167,12 @@ class JwtHelper
         );
 
         if ($result !== 1) {
+            error_log('JWT DEBUG: Signature verification failed. OpenSSL result: ' . $result);
+
+            while ($error = openssl_error_string()) {
+                error_log('JWT OPENSSL ERROR: ' . $error);
+            }
+
             return null;
         }
 
@@ -177,11 +185,14 @@ class JwtHelper
             return null;
         }
 
-        if (
-            !isset($payload['exp']) ||
-            !is_numeric($payload['exp']) ||
-            $payload['exp'] < time()
-        ) {
+        if (!isset($payload['exp']) || !is_numeric($payload['exp'])) {
+            error_log('JWT DEBUG: Missing or invalid expiration claim.');
+            return null;
+        }
+
+        if ((int)$payload['exp'] < time()) {
+            error_log('JWT DEBUG: Token expired. Current time: ' . time()
+                . ', token expiration: ' . $payload['exp']);
             return null;
         }
 
