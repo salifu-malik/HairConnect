@@ -430,7 +430,7 @@ class AuthService
             'user_id' => $user->id,
             'email' => $user->email,
             'roles' => $roles,
-        ], 60);
+        ], 3600);
 
         /*
          * Generate a cryptographically secure refresh token.
@@ -507,7 +507,7 @@ class AuthService
             'user_id' => $user->id,
             'email' => $user->email,
             'roles' => $roles,
-        ], 60);
+        ], 3600);
 
         $this->auditLogService->auth(
             'TOKEN_REFRESH',

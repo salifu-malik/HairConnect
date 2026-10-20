@@ -45,19 +45,40 @@ class UserRepository {
         return $data ? new User($data) : null;
     }
 
-    public function create(array $data): int {
+    public function create(array $data): int
+    {
         $stmt = $this->db->prepare("
-            INSERT INTO users (first_name, last_name, email, phone, password_hash)
-            VALUES (:first_name, :last_name, :email, :phone, :password_hash)
-        ");
+        INSERT INTO users (
+            first_name,
+            last_name,
+            email,
+            phone,
+            password_hash,
+            public_id
+        )
+        VALUES (
+            :first_name,
+            :last_name,
+            :email,
+            :phone,
+            :password_hash,
+            UUID()
+        )
+    ");
+
         $stmt->execute([
             'first_name' => $data['firstname'],
             'last_name' => $data['lastname'],
             'email' => $data['email'],
             'phone' => $data['phone'],
-            'password_hash' => password_hash($data['password'], PASSWORD_DEFAULT),
+            'password_hash' => password_hash(
+                $data['password'],
+                PASSWORD_DEFAULT
+            ),
         ]);
-        return (int)$this->db->lastInsertId();
+
+        // Internal numeric ID, used by backend database relationships.
+        return (int) $this->db->lastInsertId();
     }
 
     public function assignRole(int $userId, string $roleName): void
