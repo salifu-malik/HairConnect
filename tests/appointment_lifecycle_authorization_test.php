@@ -8,6 +8,7 @@ use App\Helpers\DatabaseManager;
 use App\Repositories\AppointmentRepository;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
 use App\Services\AppointmentService;
 
 $db = DatabaseManager::getConnection('booking_db');
@@ -17,7 +18,8 @@ $appointmentRepository = new AppointmentRepository();
 $appointmentService = new AppointmentService(
     $appointmentRepository,
     new BarberRepository(),
-    new ShopRepository()
+    new ShopRepository(),
+    new CustomerBookingRestrictionRepository()
 );
 
 $passed = 0;

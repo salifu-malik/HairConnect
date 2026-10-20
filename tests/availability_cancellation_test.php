@@ -9,6 +9,7 @@ use App\Repositories\AppointmentRepository;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
 use App\Repositories\ServiceRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
 use App\Repositories\SubscriptionRepository;
 use App\Services\BookingService;
 use App\Services\AppointmentService;
@@ -53,19 +54,21 @@ try {
     $subscriptionRepository = new SubscriptionRepository();
 
     $bookingService = new BookingService(
-    $shopRepository,
-    $barberRepository,
-    $serviceRepository,
-    new BarberHomeServiceRepository(),
-    $appointmentRepository,
-    new BarberScheduleRepository(),
-    $subscriptionRepository
-);
+        $shopRepository,
+        $barberRepository,
+        $serviceRepository,
+        new BarberHomeServiceRepository(),
+        $appointmentRepository,
+        new BarberScheduleRepository(),
+        $subscriptionRepository,
+        new CustomerBookingRestrictionRepository()
+    );
 
     $appointmentService = new AppointmentService(
         $appointmentRepository,
         $barberRepository,
-        $shopRepository
+        $shopRepository,
+        new CustomerBookingRestrictionRepository()
     );
 
     /*

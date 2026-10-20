@@ -75,6 +75,12 @@ return [
             'user' => $_ENV['DB_USER'],
             'password' => $_ENV['DB_PASSWORD'],
         ],
-        // ... add other databases
+        'messaging_db' => [
+            'host' => $_ENV['DB_HOST'],
+            'dbname' => 'messaging_db',
+            'user' => $_ENV['DB_USER'],
+            'password' => $_ENV['DB_PASSWORD'],
+        ],
+        // ... more databases
     ]
 ];

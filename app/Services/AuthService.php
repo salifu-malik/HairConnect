@@ -13,6 +13,8 @@ use Exception;
 use App\Repositories\AuditLogRepository;
 use App\Services\AuditLogService;
 use App\Services\MailService;
+use App\Exceptions\AuthenticationException;
+use App\Exceptions\EmailNotVerifiedException;
 
 
 class AuthService
@@ -23,6 +25,7 @@ class AuthService
     private RedisManager $redisManager;
     private MailService $mailService;
     private AuditLogService $auditLogService;
+    private \App\Helpers\LoginRiskAssessor $loginRiskAssessor;
 
     public function __construct(UserRepository $userRepository, SessionRepository $sessionRepository,  PasswordResetRepository $passwordResetRepository, MailService $mailService, RedisManager $redisManager, AuditLogService $auditLogService)
     {
@@ -32,6 +35,9 @@ class AuthService
         $this->mailService = $mailService;
         $this->redisManager = $redisManager;
         $this->auditLogService = $auditLogService;
+        $this->loginRiskAssessor = new \App\Helpers\LoginRiskAssessor(
+            $redisManager
+        );
     }
 
     public function register(array $data): int
@@ -58,7 +64,6 @@ class AuthService
 
         /*
          * Generate a cryptographically secure verification token.
-         *
          * The raw token is sent to the user's email.
          * Only its SHA-256 hash is stored in Redis.
          */
@@ -68,7 +73,6 @@ class AuthService
 
         /*
          * Store verification information in Redis.
-         *
          * Token lifetime: 15 minutes.
          */
         $tokenKey = "email_verification:token:{$tokenHash}";
@@ -83,8 +87,8 @@ class AuthService
         );
 
         /*
-         * Keep track of the current token for this user.
-         * This allows a future resend operation to invalidate
+         * Keep track of the current token for this user
+         * in order to  allow a future resend operation to invalidate
          * the previous token.
          */
         $currentTokenKey = "email_verification:current:{$userId}";
@@ -126,9 +130,7 @@ class AuthService
             );
         }
 
-        /*
-         * Build frontend verification URL.
-         */
+       //Build frontend verification URL.
         $frontendUrl =
             getenv('FRONTEND_URL');
 //                ?: 'http://localhost:5173';
@@ -138,9 +140,7 @@ class AuthService
             '/verify-email?token=' .
             urlencode($token);
 
-        /*
-         * Send verification email.
-         */
+       //Send verification email.
         $this->mailService->sendEmailVerification(
             $email,
             $verificationUrl
@@ -162,16 +162,12 @@ class AuthService
 
         $user = $this->userRepository->findByEmail($email);
 
-        /*
-         * Don't reveal whether an account exists.
-         */
+        //Don't reveal whether an account exists.
         if (!$user) {
             return;
         }
 
-        /*
-         * Already verified.
-         */
+        //Already verified.
         if ($user->emailVerifiedAt !== null) {
             return;
         }
@@ -192,9 +188,7 @@ class AuthService
             );
         }
 
-        /*
-         * Invalidate the previous token.
-         */
+        //Invalidate the previous token.
         $currentTokenKey =
             "email_verification:current:{$user->id}";
 
@@ -213,9 +207,7 @@ class AuthService
             $this->redisManager->delete($oldTokenKey);
         }
 
-        /*
-         * Generate new token.
-         */
+       // Generate new token.
         $token = bin2hex(random_bytes(32));
 
         $tokenHash = hash('sha256', $token);
@@ -272,8 +264,7 @@ class AuthService
 
         /*
          * Hash the token supplied by the client.
-         *
-         * The raw token is never stored in Redis.
+         * The raw token not to stored in Redis.
          */
         $tokenHash = hash(
             'sha256',
@@ -283,9 +274,7 @@ class AuthService
         $tokenKey =
             "email_verification:token:{$tokenHash}";
 
-        /*
-         * Retrieve the verification record from Redis.
-         */
+        // Retrieve the verification record from Redis.
         $verificationData = $this->redisManager->get(
             $tokenKey
         );
@@ -305,15 +294,11 @@ class AuthService
 
         $userId = (int) $verificationData['user_id'];
 
-        /*
-         * Retrieve the user from the database.
-         */
+        //Retrieve the user from the database.
         $user = $this->userRepository->findById($userId);
 
         if (!$user) {
-            /*
-             * Remove the invalid verification record.
-             */
+            //Remove the invalid verification record.
             $this->redisManager->delete($tokenKey);
 
             throw new Exception(
@@ -338,21 +323,15 @@ class AuthService
             );
         }
 
-        /*
-         * Mark the user's email as verified in MySQL.
-         */
+         //Mark the user's email as verified in MySQL.
         $this->userRepository->markEmailAsVerified(
             $userId
         );
 
-        /*
-         * The verification token is now consumed.
-         */
+        // The verification token is now consumed.
         $this->redisManager->delete($tokenKey);
 
-        /*
-         * Remove the current-token pointer.
-         */
+       // Remove the current-token pointer.
         $this->redisManager->delete(
             "email_verification:current:{$userId}"
         );
@@ -364,6 +343,12 @@ class AuthService
     {
         $email = trim(strtolower($email));
 
+        /*
+         * Find the account and verify the password.
+         *
+         * If the account does not exist, password_verify()
+         * is not called because the user lookup failed.
+         */
         $user = $this->userRepository->findByEmail($email);
 
         if (
@@ -373,6 +358,10 @@ class AuthService
                 $user->getPasswordHash()
             )
         ) {
+            /*
+             * Record the failed authentication event.
+             * AuditLogService::log() handles its own failures.
+             */
             $this->auditLogService->log([
                 'user_id' => $user?->id,
                 'user_email' => $email,
@@ -385,30 +374,68 @@ class AuthService
                 ],
             ]);
 
-            throw new Exception("Invalid credentials.");
+            /*
+             * Update the account's failed-attempt counter.
+             *
+             * If Redis is unavailable, allow the infrastructure
+             * error to propagate rather than silently bypassing
+             * the security control.
+             */
+            $this->loginRiskAssessor->recordFailure($email);
+
+            throw new AuthenticationException('Invalid credentials.');
         }
+
+        /*
+         * The password is correct, so clear the counter for
+         * incorrect-password attempts before checking whether
+         * the account's email has been verified.
+         */
+
         if ($user->emailVerifiedAt === null) {
-            throw new Exception(
-                "Please verify your email before logging in."
+            $this->auditLogService->auth(
+                'LOGIN_BLOCKED_EMAIL_UNVERIFIED',
+                $user,
+                'Login blocked because the email address is not verified.',
+                [
+                    'reason' => 'email_not_verified',
+                ]
+            );
+
+            throw new EmailNotVerifiedException(
+                'Please verify your email before logging in.'
             );
         }
 
+        $this->loginRiskAssessor->clearFailures($email);
+
+
+       // Load roles after authentication and email verification.
         $roles = $this->userRepository->getRoles($user->id);
 
         $user->roles = $roles;
 
+         // Record successful authentication.
         $this->auditLogService->auth(
             'LOGIN_SUCCESS',
             $user,
             'User logged in successfully.'
         );
 
+        /*
+         * Issue the access token.
+         * Existing lifetime: 1 hour.
+         */
         $accessToken = JwtHelper::encode([
             'user_id' => $user->id,
             'email' => $user->email,
-            'roles' => $roles
-        ], 3600);
+            'roles' => $roles,
+        ], 60);
 
+        /*
+         * Generate a cryptographically secure refresh token.
+         * Existing lifetime: 7 days.
+         */
         $refreshToken = bin2hex(random_bytes(64));
 
         $expiresAt = date(
@@ -425,22 +452,20 @@ class AuthService
         return [
             'user' => $user,
             'token' => $accessToken,
-            'refresh_token' => $refreshToken
+            'refresh_token' => $refreshToken,
         ];
     }
 
-    public function refresh(string $refreshToken)
+    public function refresh(string $refreshToken): array
     {
-        if (empty($refreshToken)) {
-            throw new Exception("Invalid or expired refresh token.");
+        if ($refreshToken === '') {
+            throw new AuthenticationException(
+                'Invalid or expired refresh token.'
+            );
         }
 
-        /*
-         * Generate the replacement refresh token.
-         */
-        $newRefreshToken = bin2hex(
-            random_bytes(64)
-        );
+        // Generate a replacement refresh token.
+        $newRefreshToken = bin2hex(random_bytes(64));
 
         $expiresAt = date(
             'Y-m-d H:i:s',
@@ -448,8 +473,8 @@ class AuthService
         );
 
         /*
-         * Atomically consume the current refresh token
-         * and create the replacement token.
+         * Atomically consume the existing refresh token
+         * and create its replacement.
          */
         $session = $this->sessionRepository->rotateToken(
             $refreshToken,
@@ -458,33 +483,31 @@ class AuthService
         );
 
         if (!$session) {
-            throw new Exception(
-                "Invalid or expired refresh token."
+            throw new AuthenticationException(
+                'Invalid or expired refresh token.'
             );
         }
 
-        /*
-         * Retrieve the user associated with the consumed session.
-         */
+        // Retrieve the user associated with the consumed session.
         $user = $this->userRepository->findById(
             (int) $session['user_id']
         );
 
         if (!$user) {
-            throw new Exception("User not found.");
+            throw new \RuntimeException(
+                'User associated with the refresh session was not found.'
+            );
         }
 
         $roles = $this->userRepository->getRoles($user->id);
         $user->roles = $roles;
 
-        /*
-         * Issue a new access token.
-         */
+        // Issue a new access token.
         $accessToken = JwtHelper::encode([
             'user_id' => $user->id,
             'email' => $user->email,
-            'roles' => $roles
-        ], 3600);
+            'roles' => $roles,
+        ], 60);
 
         $this->auditLogService->auth(
             'TOKEN_REFRESH',
@@ -494,9 +517,12 @@ class AuthService
 
         return [
             'token' => $accessToken,
-            'refresh_token' => $newRefreshToken
+            'refresh_token' => $newRefreshToken,
         ];
     }
+
+
+
     public function logout(string $refreshToken)
     {
         $session = $this->sessionRepository->findByToken($refreshToken);
@@ -533,14 +559,12 @@ class AuthService
 
 
         // Do not reveal whether an account exists.
-
         if (!$user) {
             return null;
         }
 
 
          //Enforce the 5-minute resend restriction.
-
         $latestRequest = $this->passwordResetRepository
             ->findLatestByEmail($email);
 
@@ -557,18 +581,15 @@ class AuthService
 
 
          //Invalidate previous reset requests.
-
         $this->passwordResetRepository
             ->invalidatePreviousRequests($email);
 
 
          //Generate a new 6-digit verification code.
-
         $code = (string) random_int(100000, 999999);
 
 
-         //Never store the actual code in the database.
-
+         //Not to store the actual code in the database.
         $codeHash = password_hash(
             $code,
             PASSWORD_DEFAULT
@@ -583,7 +604,6 @@ class AuthService
 
 
         //Save the hashed code.
-
         $this->passwordResetRepository->create(
             $user->id,
             $email,
@@ -594,7 +614,6 @@ class AuthService
 
 
          //Send the actual code to the user's email.
-
         $this->mailService->sendPasswordResetCode(
             $email,
             $code
@@ -602,7 +621,6 @@ class AuthService
 
 
          //The code is intentionally NOT returned.
-
         return null;
     }
 
@@ -752,7 +770,6 @@ class AuthService
 
         /*
          * Return the raw token to the frontend.
-         *
          * The database contains only its hash.
          */
         return $resetToken;

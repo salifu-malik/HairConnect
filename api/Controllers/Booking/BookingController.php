@@ -10,6 +10,8 @@ use App\Repositories\BarberScheduleRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
 use App\Repositories\SubscriptionRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
+use App\Repositories\NotificationRepository;
 use App\Services\BookingService;
 use App\Exceptions\BookingConflictException;
 
@@ -26,7 +28,9 @@ class BookingController
             new BarberHomeServiceRepository(),
             new AppointmentRepository(),
             new BarberScheduleRepository(),
-            new SubscriptionRepository()
+            new SubscriptionRepository(),
+            new CustomerBookingRestrictionRepository(),
+            new NotificationRepository()
         );
     }
 
@@ -185,6 +189,41 @@ class BookingController
             ]);
         }
     }
+
+
+    /**
+     * SHOP_OWNER
+     *
+     * Get dashboard statistics for the authenticated shop owner.
+     */
+    public function getDashboardStats(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        $auth = AuthMiddleware::checkRole(['SHOP_OWNER']);
+        $ownerId = (int) $auth['user']->id;
+
+        try {
+            $stats = $this->bookingService
+                ->getShopOwnerDashboardStats($ownerId);
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'data' => $stats,
+            ]);
+        } catch (\Throwable $e) {
+            http_response_code(500);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Failed to retrieve dashboard statistics.',
+            ]);
+        }
+    }
+
+
 
 
     /**

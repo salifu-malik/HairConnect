@@ -8,21 +8,29 @@ use App\Helpers\DatabaseManager;
 use App\Repositories\AppointmentRepository;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
+use App\Repositories\NotificationRepository;
 use App\Services\AppointmentService;
 
 $db = DatabaseManager::getConnection('booking_db');
+
+$notificationDb = DatabaseManager::getConnection('notification_db');
 
 $appointmentRepository = new AppointmentRepository();
 
 $appointmentService = new AppointmentService(
     $appointmentRepository,
     new BarberRepository(),
-    new ShopRepository()
+    new ShopRepository(),
+    new CustomerBookingRestrictionRepository()
 );
 
 $passed = 0;
 $failed = 0;
 $testAppointmentId = null;
+$restrictionIdBeforeTest = null;
+$notificationIdsBeforeTest = [];
+
 
 function check(
     string $name,
@@ -45,6 +53,57 @@ try {
      * Use a dedicated test record.
      * Existing appointments are never selected for cancellation.
      */
+    $restrictionIdBeforeTest = (int) $db->query("
+    SELECT COALESCE(MAX(id), 0)
+    FROM customer_booking_restrictions
+    WHERE customer_id = 8
+")->fetchColumn();
+
+    /*
+ * Record the existing cancellation notifications for barber 1's
+ * user account so we can identify notifications created by this test.
+ */
+    $barber = (new BarberRepository())->findById(1);
+
+    if (!$barber || $barber->userId <= 0) {
+        throw new RuntimeException(
+            'Could not identify the test barber user account.'
+        );
+    }
+
+    $notificationStmt = $notificationDb->prepare("
+    SELECT COALESCE(MAX(id), 0)
+    FROM notifications
+    WHERE user_id = :user_id
+      AND type = 'booking_cancelled'
+");
+
+    $notificationStmt->execute([
+        'user_id' => $barber->userId,
+    ]);
+
+    $notificationIdsBeforeTest['barber'] = (int)
+    $notificationStmt->fetchColumn();
+
+    /*
+ * Record the shop owner's existing cancellation notifications.
+ */
+    $shop = (new ShopRepository())->findById(1);
+
+    if (!$shop || $shop->ownerId <= 0) {
+        throw new RuntimeException(
+            'Could not identify the test shop owner account.'
+        );
+    }
+
+    $notificationStmt->execute([
+        'user_id' => $shop->ownerId,
+    ]);
+
+    $notificationIdsBeforeTest['shop_owner'] = (int)
+    $notificationStmt->fetchColumn();
+
+
     $stmt = $db->prepare("
         INSERT INTO appointments (
             customer_id,
@@ -135,7 +194,106 @@ try {
     );
 
     /*
-     * Test 3: A different customer cannot cancel it.
+     * Test 3: The barber receives a cancellation notification.
+     */
+    check(
+        'Barber receives a cancellation notification',
+        function () use (
+            $notificationDb,
+            $barber,
+            $notificationIdsBeforeTest
+        ): void {
+            $stmt = $notificationDb->prepare("
+            SELECT id, title, message, type, status
+            FROM notifications
+            WHERE user_id = :user_id
+              AND type = 'booking_cancelled'
+              AND id > :last_id
+            ORDER BY id DESC
+            LIMIT 1
+        ");
+
+            $stmt->execute([
+                'user_id' => $barber->userId,
+                'last_id' => $notificationIdsBeforeTest['barber'],
+            ]);
+
+            $notification = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$notification) {
+                throw new RuntimeException(
+                    'No cancellation notification was created for the barber.'
+                );
+            }
+
+            if ($notification['title'] !== 'Appointment Cancelled') {
+                throw new RuntimeException(
+                    'The cancellation notification title is incorrect.'
+                );
+            }
+
+            if ($notification['status'] !== 'unread') {
+                throw new RuntimeException(
+                    'The cancellation notification should initially be unread.'
+                );
+            }
+        },
+        $passed,
+        $failed
+    );
+
+
+    /*
+ * Test: The shop owner receives a cancellation notification.
+ */
+    check(
+        'Shop owner receives a cancellation notification',
+        function () use (
+            $notificationDb,
+            $shop,
+            $notificationIdsBeforeTest
+        ): void {
+            $stmt = $notificationDb->prepare("
+            SELECT id, title, message, type, status
+            FROM notifications
+            WHERE user_id = :user_id
+              AND type = 'booking_cancelled'
+              AND id > :last_id
+            ORDER BY id DESC
+            LIMIT 1
+        ");
+
+            $stmt->execute([
+                'user_id' => $shop->ownerId,
+                'last_id' => $notificationIdsBeforeTest['shop_owner'],
+            ]);
+
+            $notification = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$notification) {
+                throw new RuntimeException(
+                    'No cancellation notification was created for the shop owner.'
+                );
+            }
+
+            if ($notification['title'] !== 'Shop Appointment Cancelled') {
+                throw new RuntimeException(
+                    'The shop-owner notification title is incorrect.'
+                );
+            }
+
+            if ($notification['status'] !== 'unread') {
+                throw new RuntimeException(
+                    'The shop-owner notification should initially be unread.'
+                );
+            }
+        },
+        $passed,
+        $failed
+    );
+
+    /*
+     * Test 4: A different customer cannot cancel it.
      */
     check(
         'Another customer cannot cancel the appointment',
@@ -168,7 +326,7 @@ try {
     );
 
     /*
-     * Test 4: A second cancellation is rejected.
+     * Test 5: A second cancellation is rejected.
      */
     check(
         'A cancelled appointment cannot be cancelled again',
@@ -204,7 +362,7 @@ try {
     $failed++;
 } finally {
     /*
-     * Delete only the dedicated test record.
+     * Delete only the dedicated test appointment.
      */
     if ($testAppointmentId !== null) {
         $cleanup = $db->prepare("
@@ -226,6 +384,102 @@ try {
                 . "Appointment ID: {$testAppointmentId}\n";
             $failed++;
         }
+    }
+
+
+
+
+    /*
+     * Remove restrictions created by this test.
+     */
+    if ($restrictionIdBeforeTest !== null) {
+        $cleanupRestrictions = $db->prepare("
+            DELETE FROM customer_booking_restrictions
+            WHERE customer_id = :customer_id
+              AND id > :restriction_id
+              AND reason = :reason
+        ");
+
+        $cleanupRestrictions->execute([
+            'customer_id' => 8,
+            'restriction_id' => $restrictionIdBeforeTest,
+            'reason' => 'Appointment cancellation',
+        ]);
+
+        /*
+  * Remove only cancellation notifications created by this test.
+  */
+        if (
+            isset($notificationIdsBeforeTest['barber'])
+            && isset($barber)
+        ) {
+            $cleanupNotifications = $notificationDb->prepare("
+        DELETE FROM notifications
+        WHERE user_id = :user_id
+          AND type = 'booking_cancelled'
+          AND id > :last_id
+          AND title = 'Appointment Cancelled'
+    ");
+
+            $cleanupNotifications->execute([
+                'user_id' => $barber->userId,
+                'last_id' => $notificationIdsBeforeTest['barber'],
+            ]);
+
+            echo "[CLEANUP] Removed "
+                . $cleanupNotifications->rowCount()
+                . " barber test notification(s)\n";
+        }
+
+        if (
+            isset($notificationIdsBeforeTest['shop_owner'])
+            && isset($shop)
+        ) {
+            $cleanupShopNotifications = $notificationDb->prepare("
+        DELETE FROM notifications
+        WHERE user_id = :user_id
+          AND type = 'booking_cancelled'
+          AND id > :last_id
+          AND title = 'Shop Appointment Cancelled'
+    ");
+
+            $cleanupShopNotifications->execute([
+                'user_id' => $shop->ownerId,
+                'last_id' => $notificationIdsBeforeTest['shop_owner'],
+            ]);
+
+            echo "[CLEANUP] Removed "
+                . $cleanupShopNotifications->rowCount()
+                . " shop-owner test notification(s)\n";
+        }
+    }
+
+
+
+    /*
+ * Remove only cancellation notifications created by this test
+ * for the barber account.
+ */
+    if (
+        isset($notificationIdsBeforeTest['barber'])
+        && isset($barber)
+    ) {
+        $cleanupNotifications = $notificationDb->prepare("
+        DELETE FROM notifications
+        WHERE user_id = :user_id
+          AND type = 'booking_cancelled'
+          AND id > :last_id
+          AND title = 'Appointment Cancelled'
+    ");
+
+        $cleanupNotifications->execute([
+            'user_id' => $barber->userId,
+            'last_id' => $notificationIdsBeforeTest['barber'],
+        ]);
+
+        echo "[CLEANUP] Removed "
+            . $cleanupNotifications->rowCount()
+            . " test cancellation notification(s)\n";
     }
 }
 

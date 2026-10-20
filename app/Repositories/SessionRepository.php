@@ -9,9 +9,12 @@ class SessionRepository
 {
     private PDO $db;
 
-    public function __construct()
+
+
+    public function __construct(?PDO $connection = null)
     {
-        $this->db = DatabaseManager::getConnection('users_db');
+        $this->db = $connection
+            ?? DatabaseManager::getConnection('users_db');
     }
 
     public function save(

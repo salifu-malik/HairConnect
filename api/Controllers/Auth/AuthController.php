@@ -9,55 +9,78 @@ use App\Repositories\AuditLogRepository;
 use App\Services\AuditLogService;
 use App\Services\AuthService;
 use App\Helpers\RedisManager;
+use App\Helpers\Logger;
+use App\Helpers\LoginRiskAssessor;
 use App\Services\MailService;
-
+use App\Exceptions\AuthenticationException;
+use App\Exceptions\EmailNotVerifiedException;
+use App\Helpers\RequestBodyReader;
+use App\Helpers\TurnstileVerifierInterface;
+use App\Helpers\CloudflareTurnstileVerifier;
+use App\Helpers\RefreshTokenCookieManager;
+use App\Helpers\RefreshTokenCookieManagerInterface;
 
 class AuthController
 {
     private AuthService $authService;
+    private LoginRiskAssessor $loginRiskAssessor;
+    private TurnstileVerifierInterface $turnstileVerifier;
 
-    public function __construct()
-    {
-        $this->authService = new AuthService(
-            new UserRepository(),
-            new SessionRepository(),
-            new PasswordResetRepository(),
-            new MailService(),
-            new RedisManager(),
-            new AuditLogService(
-                new AuditLogRepository()
-            )
-        );
+    private RequestBodyReader $requestBodyReader;
+
+    private RefreshTokenCookieManagerInterface $refreshTokenCookieManager;
+
+    /**
+     * Dependencies can be injected for testing.
+     *
+     * When no dependencies are supplied, initialize the normal
+     * production services.
+     */
+    public function __construct(
+        ?AuthService $authService = null,
+        ?LoginRiskAssessor $loginRiskAssessor = null,
+        ?TurnstileVerifierInterface $turnstileVerifier = null,
+        ?RequestBodyReader $requestBodyReader = null,
+        ?RefreshTokenCookieManagerInterface $refreshTokenCookieManager = null
+    ) {
+        $redisManager = new RedisManager();
+
+        $this->loginRiskAssessor = $loginRiskAssessor
+            ?? new LoginRiskAssessor($redisManager);
+
+        $this->authService = $authService
+            ?? new AuthService(
+                new UserRepository(),
+                new SessionRepository(),
+                new PasswordResetRepository(),
+                new MailService(),
+                $redisManager,
+                new AuditLogService(
+                    new AuditLogRepository()
+                )
+            );
+
+        $this->turnstileVerifier = $turnstileVerifier
+            ?? new CloudflareTurnstileVerifier();
+
+        $this->requestBodyReader = $requestBodyReader
+            ?? new RequestBodyReader();
+
+        $this->refreshTokenCookieManager = $refreshTokenCookieManager
+            ?? new RefreshTokenCookieManager();
     }
+
+
 
     private function setRefreshTokenCookie(string $refreshToken): void
     {
-        $secure = getenv('COOKIE_SECURE') === 'true';
-
-        setcookie('refresh_token', $refreshToken, [
-            'expires' => time() + (7 * 24 * 60 * 60),
-            'path' => '/',
-            'secure' => $secure,
-            'httponly' => true,
-            'samesite' => getenv('COOKIE_SAMESITE') ?: 'Lax',
-        ]);
+        $this->refreshTokenCookieManager->set($refreshToken);
     }
-
-
 
     private function clearRefreshTokenCookie(): void
     {
-        $secure = getenv('COOKIE_SECURE') === 'true';
-
-        setcookie('refresh_token', '', [
-            'expires' => time() - 3600,
-            'path' => '/',
-            'secure' => $secure,
-            'httponly' => true,
-            'samesite' => getenv('COOKIE_SAMESITE') ?: 'Lax',
-        ]);
+        $this->refreshTokenCookieManager->clear();
     }
-
     /**
      * POST /api/auth/register
      */
@@ -71,6 +94,24 @@ class AuthController
         );
 
         try {
+
+            $turnstileToken = $data['turnstile_token'] ?? '';
+
+            if (
+                !is_string($turnstileToken) ||
+                !$this->turnstileVerifier->verify($turnstileToken)
+            ) {
+                http_response_code(403);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Security verification failed. Please try again.'
+                ]);
+
+                return;
+            }
+
+            unset($data['turnstile_token']);
 
             $this->authService->register($data);
 
@@ -185,53 +226,232 @@ class AuthController
     }
 
 
-
     /**
      * POST /api/auth/login
      */
-    public function login()
+    public function login(): void
     {
-        header('Content-Type: application/json');
+        header('Content-Type: application/json; charset=UTF-8');
 
-        $data = json_decode(
-            file_get_contents('php://input'),
-            true
-        );
+        /*
+         * 1. Decode and validate the request body.
+         */
+        $data = $this->requestBodyReader->read();
+
+        if (!is_array($data)) {
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Invalid login request.',
+            ]);
+
+            return;
+        }
+
+        $email = $data['email'] ?? '';
+        $password = $data['password'] ?? '';
+
+        if (
+            !is_string($email) ||
+            !is_string($password) ||
+            trim($email) === '' ||
+            $password === ''
+        ) {
+            http_response_code(400);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Email and password are required.',
+            ]);
+
+            return;
+        }
 
         try {
-
-            $result = $this->authService->login(
-                $data['email'] ?? '',
-                $data['password'] ?? ''
+            /*
+             * 2. Assess login risk before password verification.
+             *
+             * The risk assessor and AuthService share the same
+             * RedisManager instance through the constructor.
+             */
+            $risk = $this->loginRiskAssessor->assess(
+                trim($email),
+                $_SERVER['REMOTE_ADDR'] ?? 'unknown'
             );
 
             /*
-             * Store the refresh token in an HttpOnly cookie.
+             * 3. Reject high-risk requests before authentication.
+             */
+            if ($risk['level'] === 'high') {
+                Logger::warning(
+                    'High-risk login request rejected.',
+                    [
+                        'risk_level' => $risk['level'],
+                        'reason' => $risk['reason'],
+                    ],
+                    'auth'
+                );
+
+                http_response_code(429);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Too many requests. Please try again later.',
+                ]);
+
+                return;
+            }
+
+            /*
+             * 4. Require Turnstile verification for medium-risk
+             * requests only.
+             */
+            if ($risk['level'] === 'medium') {
+                $turnstileToken = $data['turnstile_token'] ?? '';
+
+                if (
+                    !is_string($turnstileToken) ||
+                    trim($turnstileToken) === ''
+                ) {
+                    Logger::warning(
+                        'Medium-risk login rejected because the Turnstile token is missing.',
+                        [
+                            'risk_level' => $risk['level'],
+                            'reason' => $risk['reason'],
+                        ],
+                        'auth'
+                    );
+
+                    http_response_code(403);
+
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'Security verification failed. Please try again.',
+                    ]);
+
+                    return;
+                }
+
+                if (!$this->turnstileVerifier->verify($turnstileToken)) {
+                    Logger::warning(
+                        'Medium-risk login rejected after Turnstile verification failed.',
+                        [
+                            'risk_level' => $risk['level'],
+                            'reason' => $risk['reason'],
+                        ],
+                        'auth'
+                    );
+
+                    http_response_code(403);
+
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'Security verification failed. Please try again.',
+                    ]);
+
+                    return;
+                }
+            }
+
+            /*
+             * 5. Authenticate the user.
+             *
+             * AuthService handles password verification,
+             * failed-attempt tracking, and email verification.
+             */
+            $result = $this->authService->login(
+                trim($email),
+                $password
+            );
+
+            /*
+             * 6. Store the refresh token in an HttpOnly cookie.
              */
             $this->setRefreshTokenCookie(
                 $result['refresh_token']
             );
 
             /*
-             * Never send the refresh token
-             * back to the frontend in JSON.
+             * Never return the refresh token in the JSON response.
              */
             unset($result['refresh_token']);
 
+            /*
+             * 7. Return the successful authentication response.
+             */
             http_response_code(200);
 
             echo json_encode([
                 'status' => 'success',
-                'data' => $result
+                'data' => $result,
             ]);
 
-        } catch (\Throwable $e) {
-
+        } catch (AuthenticationException $e) {
+            /*
+             * Invalid credentials.
+             */
             http_response_code(401);
 
             echo json_encode([
                 'status' => 'error',
-                'message' => $e->getMessage()
+                'message' => 'Invalid credentials.',
+            ]);
+
+        } catch (EmailNotVerifiedException $e) {
+            /*
+             * Password accepted, but email verification is required.
+             */
+            http_response_code(403);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Please verify your email before logging in.',
+            ]);
+
+        } catch (\RuntimeException $e) {
+            /*
+             * Infrastructure failure, such as Redis or Turnstile
+             * being unavailable.
+             *
+             * Do not expose internal exception details to the client.
+             */
+            Logger::error(
+                'Login security infrastructure failure.',
+                [
+                    'exception' => get_class($e),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ],
+                'auth'
+            );
+
+            http_response_code(503);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Login security is temporarily unavailable. Please try again later.',
+            ]);
+
+        } catch (\Throwable $e) {
+            /*
+             * Unexpected application or server error.
+             */
+            Logger::error(
+                'Unexpected login failure.',
+                [
+                    'exception' => get_class($e),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ],
+                'auth'
+            );
+
+            http_response_code(500);
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'An unexpected server error occurred.',
             ]);
         }
     }
@@ -240,55 +460,63 @@ class AuthController
     /**
      * POST /api/auth/refresh
      */
-    public function refresh()
+    public function refresh(): void
     {
         header('Content-Type: application/json');
 
         try {
-
-            /*
-             * Read the refresh token from the HttpOnly cookie.
-             */
+            // Read the refresh token from the HttpOnly cookie.
             $refreshToken = $_COOKIE['refresh_token'] ?? '';
 
-            if (empty($refreshToken)) {
-                throw new \Exception(
-                    'Refresh token is missing.'
-                );
+            if (!is_string($refreshToken) || $refreshToken === '') {
+                http_response_code(401);
+
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid or expired refresh token.',
+                ]);
+
+                return;
             }
 
-            $result = $this->authService->refresh(
-                $refreshToken
-            );
+            $result = $this->authService->refresh($refreshToken);
 
-            /*
-             * The refresh token is rotated by AuthService.
-             * Store the new token in the cookie.
-             */
-            $this->setRefreshTokenCookie(
-                $result['refresh_token']
-            );
+            // Store the rotated refresh token in the HttpOnly cookie.
+            $this->setRefreshTokenCookie($result['refresh_token']);
 
-            /*
-             * Never expose the refresh token
-             * to the frontend.
-             */
+            // Never expose the refresh token in the JSON response.
             unset($result['refresh_token']);
 
             http_response_code(200);
 
             echo json_encode([
                 'status' => 'success',
-                'data' => $result
+                'data' => $result,
             ]);
-
         } catch (\Throwable $e) {
+            // Do not log the refresh token or other credentials.
+            \App\Helpers\Logger::error(
+                'Refresh-token operation failed.',
+                [
+                    'exception' => get_class($e),
+                    'message' => $e->getMessage(),
+                ],
+                'auth'
+            );
 
-            http_response_code(401);
+            // Unexpected errors should not be reported as authentication
+            // failures because they may indicate a server-side problem.
+            $statusCode = $e instanceof \App\Exceptions\AuthenticationException
+                ? 401
+                : 500;
+
+            http_response_code($statusCode);
 
             echo json_encode([
                 'status' => 'error',
-                'message' => $e->getMessage()
+                'message' => $statusCode === 401
+                    ? 'Invalid or expired refresh token.'
+                    : 'Unable to refresh your session. Please try again.',
             ]);
         }
     }
@@ -296,49 +524,54 @@ class AuthController
     /**
      * POST /api/auth/logout
      */
-    public function logout()
+    public function logout(): void
     {
         header('Content-Type: application/json');
 
         try {
-
-            /*
-             * Read refresh token from HttpOnly cookie.
-             */
             $refreshToken = $_COOKIE['refresh_token'] ?? '';
 
-            if (!empty($refreshToken)) {
-
-                $this->authService->logout(
-                    $refreshToken
-                );
+            if (is_string($refreshToken) && $refreshToken !== '') {
+                $this->authService->logout($refreshToken);
             }
 
-            /*
-             * Clear the browser cookie.
-             */
             $this->clearRefreshTokenCookie();
 
             http_response_code(200);
 
             echo json_encode([
                 'status' => 'success',
-                'message' => 'Logged out'
+                'message' => 'Logged out',
             ]);
-
         } catch (\Throwable $e) {
+            // Attempt to clear the browser cookie even if revocation fails.
+            try {
+                $this->clearRefreshTokenCookie();
+            } catch (\Throwable $cookieException) {
+                \App\Helpers\Logger::error(
+                    'Failed to clear the refresh-token cookie during logout.',
+                    [
+                        'exception' => get_class($cookieException),
+                        'message' => $cookieException->getMessage(),
+                    ],
+                    'auth'
+                );
+            }
 
-            /*
-             * Even if server-side revocation fails,
-             * attempt to remove the browser cookie.
-             */
-            $this->clearRefreshTokenCookie();
+            \App\Helpers\Logger::error(
+                'Logout operation failed.',
+                [
+                    'exception' => get_class($e),
+                    'message' => $e->getMessage(),
+                ],
+                'auth'
+            );
 
-            http_response_code(400);
+            http_response_code(500);
 
             echo json_encode([
                 'status' => 'error',
-                'message' => $e->getMessage()
+                'message' => 'Unable to complete logout. Please try again.',
             ]);
         }
     }

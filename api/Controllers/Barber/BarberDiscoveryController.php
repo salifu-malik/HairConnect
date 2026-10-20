@@ -169,6 +169,7 @@ class BarberDiscoveryController
                         $user->firstName . ' ' . $user->lastName
                     ),
                     'profileImage' => $user->profileImage,
+                    'shopId' => $barber->shopId,
                     'shopName' => $shopName,
                     'rating' => null,
                     'location' => $location,

@@ -67,19 +67,38 @@ class RedisManager
 
 
 
-    public function increment(
-        string $key,
-        int $ttl = 900
-    ): int {
-        $count = $this->redis->incr($key);
-
-        if ($count === 1) {
-            $this->redis->expire($key, $ttl);
+    public function increment(string $key, int $ttl = 900): int
+    {
+        if ($ttl < 1) {
+            throw new \InvalidArgumentException(
+                'TTL must be greater than zero.'
+            );
         }
 
-        return $count;
-    }
+        $script = <<<'LUA'
+local count = redis.call('INCR', KEYS[1])
 
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+
+return count
+LUA;
+
+        $result = $this->redis->eval(
+            $script,
+            [$key, $ttl],
+            1
+        );
+
+        if ($result === false || $result === null) {
+            throw new \RuntimeException(
+                'Unable to increment Redis counter.'
+            );
+        }
+
+        return (int) $result;
+    }
 
 
     public function clear(): void

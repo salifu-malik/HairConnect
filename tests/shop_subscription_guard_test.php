@@ -10,6 +10,7 @@ use App\Repositories\BarberRepository;
 use App\Repositories\BarberScheduleRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
 use App\Repositories\SubscriptionRepository;
 use App\Services\BookingService;
 
@@ -32,7 +33,8 @@ $bookingService = new BookingService(
     new BarberHomeServiceRepository(),
     new AppointmentRepository(),
     new BarberScheduleRepository(),
-    new InactiveSubscriptionRepository()
+    new InactiveSubscriptionRepository(),
+    new CustomerBookingRestrictionRepository()
 );
 
 $expectedMessage =

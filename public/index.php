@@ -22,7 +22,7 @@ if (in_array($origin, $allowedOrigins, true)) {
 }
 
 header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-CSRF-Protection');
 header('Access-Control-Max-Age: 86400');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -35,6 +35,7 @@ require_once __DIR__ . '/../api/Controllers/Store/StoreController.php';
 
 use Api\Controllers\SubscriptionController;
 use Api\Controllers\Auth\AuthController;
+use Api\Controllers\Notification\NotificationController;
 use Api\Controllers\Profile\ProfileController;
 use Api\Controllers\Admin\AdminController;
 use Api\Controllers\Booking\BookingController;
@@ -43,8 +44,12 @@ use Api\Controllers\Barber\BarberDiscoveryController;
 use Api\Controllers\Queue\QueueController;
 use Api\Controllers\Appointment\AppointmentController;
 use Api\Controllers\Barber\BarberController;
+use Api\Controllers\ShopOwner\ShopController;
+use Api\Controllers\ShopOwner\ShopServiceController;
+use Api\Controllers\Barber\BarberScheduleController;
+use Api\Controllers\Barber\HomeServiceController;
 use Api\Controllers\Store\StoreController;
-
+use Api\Controllers\Chat\ChatController;
 use App\Repositories\PlanRepository;
 use App\Repositories\PlanVersionRepository;
 use App\Repositories\SubscriptionRepository;
@@ -53,6 +58,7 @@ use App\Repositories\UserRepository;
 use App\Repositories\SubscriptionEventRepository;
 use App\Services\PaystackService;
 use App\Services\SubscriptionService;
+
 
 
 
@@ -89,7 +95,34 @@ error_log("DEBUG NORMALIZED URI: " . $requestUri);
 
 $requestMethod = $_SERVER['REQUEST_METHOD'];
 
+// CSRF protection for refresh-token and logout endpoints.
+$isRefreshOrLogout =
+    $requestMethod === 'POST'
+    && in_array(
+        $requestUri,
+        ['/api/auth/refresh', '/api/auth/logout'],
+        true
+    );
 
+if ($isRefreshOrLogout) {
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+    $csrfHeader = $_SERVER['HTTP_X_CSRF_PROTECTION'] ?? '';
+
+    if (
+        !in_array($origin, $allowedOrigins, true)
+        || $csrfHeader !== '1'
+    ) {
+        http_response_code(403);
+        header('Content-Type: application/json');
+
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Request rejected.',
+        ]);
+
+        exit;
+    }
+}
 
 // AUTH ROUTES
 if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
@@ -238,6 +271,60 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     );
 
 
+    // SHOP OWNER SHOP ROUTES
+} elseif (
+    $requestUri === '/api/shop-owner/shops'
+    && $requestMethod === 'GET'
+) {
+    (new ShopController())->getMyShops();
+
+} elseif (
+    $requestUri === '/api/shop-owner/shops'
+    && $requestMethod === 'POST'
+) {
+    (new ShopController())->createShop();
+
+
+// SHOP OWNER SERVICE MANAGEMENT ROUTES
+} elseif (
+    $requestUri === '/api/shop/services'
+    && $requestMethod === 'GET'
+) {
+    (new ShopServiceController())->getServices();
+
+} elseif (
+    $requestUri === '/api/shop/services'
+    && $requestMethod === 'POST'
+) {
+    (new ShopServiceController())->createService();
+
+} elseif (
+    preg_match(
+        '#^/api/shop/services/([0-9]+)$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'PUT'
+) {
+    (new ShopServiceController())->updateService(
+        (int) $matches[1]
+    );
+
+} elseif (
+    preg_match(
+        '#^/api/shop/services/([0-9]+)$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'DELETE'
+) {
+    (new ShopServiceController())->deleteService(
+        (int) $matches[1]
+    );
+
+
+
+
 // SHOP OWNER BARBER ROUTES
 } elseif ($requestUri === '/api/shop-owner/barbers' && $requestMethod === 'GET') {
     (new BarberController())->getMyBarbers();
@@ -318,8 +405,22 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 ) {
     (new BookingController())->getShopOwnerAppointments();
 
+    // Shop owner: dashboard statistics
+} elseif (
+    $requestUri === '/api/shop/stats'
+    && $requestMethod === 'GET'
+) {
+    (new BookingController())->getDashboardStats();
+
 
     // APPOINTMENT LIFECYCLE ROUTES
+
+    // Barber: get appointments assigned to the authenticated barber
+} elseif (
+    $requestUri === '/api/barber/appointments'
+    && $requestMethod === 'GET'
+) {
+    (new AppointmentController())->getBarberAppointments();
 
 // Barber: confirm pending appointment
 } elseif (
@@ -539,6 +640,82 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     (new AdminController())->updateBarberApproval(
         (int) $matches[1]
     );
+
+    // NOTIFICATION ROUTES
+} elseif (
+    $requestUri === '/api/notifications'
+    && $requestMethod === 'GET'
+) {
+    (new NotificationController())->index();
+
+} elseif (
+    $requestUri === '/api/notifications/unread-count'
+    && $requestMethod === 'GET'
+) {
+    (new NotificationController())->unreadCount();
+
+} elseif (
+    $requestUri === '/api/notifications/read'
+    && $requestMethod === 'PATCH'
+) {
+    (new NotificationController())->markAsRead();
+
+    // CHAT ROUTES
+
+} elseif (
+    $requestUri === '/api/chat/chats'
+    && $requestMethod === 'GET'
+) {
+    (new ChatController())->getChats();
+
+} elseif (
+    $requestUri === '/api/chat/contacts'
+    && $requestMethod === 'GET'
+) {
+    (new ChatController())->getContacts();
+
+} elseif (
+    $requestUri === '/api/chat/conversations'
+    && $requestMethod === 'POST'
+) {
+    (new ChatController())->startBusinessConversation();
+
+
+
+} elseif (
+    preg_match('#^/api/chat/messages/([0-9]+)$#', $requestUri, $matches)
+    && $requestMethod === 'GET'
+) {
+    (new ChatController())->getMessages((int) $matches[1]);
+
+} elseif (
+    preg_match('#^/api/chat/messages/([0-9]+)$#', $requestUri, $matches)
+    && $requestMethod === 'POST'
+) {
+    (new ChatController())->sendMessage((int) $matches[1]);
+
+} elseif (
+    $requestUri === '/api/chat/complaints'
+    && $requestMethod === 'POST'
+) {
+    (new ChatController())->createComplaint();
+
+} elseif (
+    preg_match('#^/api/chat/chats/([0-9]+)$#', $requestUri, $matches)
+    && $requestMethod === 'DELETE'
+) {
+    (new ChatController())->deleteComplaint((int) $matches[1]);
+} elseif (
+    preg_match('#^/api/chat/messages/([0-9]+)/delivered$#', $requestUri, $matches)
+    && $requestMethod === 'POST'
+) {
+    (new ChatController())->markMessagesAsDelivered((int) $matches[1]);
+
+} elseif (
+    preg_match('#^/api/chat/messages/([0-9]+)/read$#', $requestUri, $matches)
+    && $requestMethod === 'POST'
+) {
+    (new ChatController())->markMessagesAsRead((int) $matches[1]);
 
     //404
 } else {

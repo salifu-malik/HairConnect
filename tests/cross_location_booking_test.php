@@ -8,6 +8,7 @@ use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
 use App\Repositories\ServiceRepository;
 use App\Repositories\SubscriptionRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
 use App\Repositories\BarberHomeServiceRepository;
 use App\Repositories\BarberScheduleRepository;
 use App\Services\BookingService;
@@ -18,15 +19,20 @@ $db = DatabaseManager::getConnection('booking_db');
 
 $appointmentRepository = new AppointmentRepository();
 $barberScheduleRepository = new BarberScheduleRepository();
+$shopRepository = new ShopRepository();
+$barberRepository = new BarberRepository();
+$serviceRepository = new ServiceRepository();
+$subscriptionRepository = new SubscriptionRepository();
 
 $bookingService = new BookingService(
-    new ShopRepository(),
-    new BarberRepository(),
-    new ServiceRepository(),
+    $shopRepository,
+    $barberRepository,
+    $serviceRepository,
     new BarberHomeServiceRepository(),
     $appointmentRepository,
     $barberScheduleRepository,
-    new SubscriptionRepository()
+    $subscriptionRepository,
+    new CustomerBookingRestrictionRepository()
 );
 
 $barberId = 1;
@@ -36,7 +42,10 @@ $homeServiceId = 1;
 $shopCustomerId = 6;
 $homeCustomerId = 11;
 
-$date = '2026-10-13'; // Tuesday
+$date = (new DateTimeImmutable(
+    'next Tuesday',
+    new DateTimeZone('Africa/Accra')
+))->format('Y-m-d');
 
 $createdIds = [];
 $passed = 0;
@@ -44,6 +53,7 @@ $failed = 0;
 
 $originalHomeSchedule = null;
 $homeScheduleChanged = false;
+$temporaryHomeScheduleId = null;
 
 function checkResult(string $description, bool $condition): void
 {
@@ -119,65 +129,67 @@ function createTestBooking(
 
 try {
     /*
-     * Save the original HOME schedule before making any changes.
-     */
+  * Save the original Tuesday HOME schedule, if one exists.
+  */
     $stmt = $db->prepare("
-        SELECT id, barber_id, day, service_location,
-               start_time, end_time
-        FROM barber_schedule
-        WHERE barber_id = ?
-          AND day = 'Tuesday'
-          AND service_location = 'HOME'
-        LIMIT 1
-    ");
+    SELECT id, barber_id, day, service_location,
+           start_time, end_time
+    FROM barber_schedule
+    WHERE barber_id = ?
+      AND day = 'Tuesday'
+      AND service_location = 'HOME'
+    LIMIT 1
+");
 
     $stmt->execute([$barberId]);
 
     $originalHomeSchedule = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$originalHomeSchedule) {
-        throw new RuntimeException(
-            'The existing Tuesday HOME schedule was not found.'
-        );
-    }
-
-    /*
-     * Temporarily make HOME hours overlap with SHOP hours.
-     * The original schedule is restored in finally.
-     */
-    $stmt = $db->prepare("
+    if ($originalHomeSchedule) {
+        // Temporarily configure the existing schedule.
+        $stmt = $db->prepare("
         UPDATE barber_schedule
         SET start_time = '09:00:00',
             end_time = '21:00:00'
         WHERE id = ?
     ");
 
-    $stmt->execute([(int) $originalHomeSchedule['id']]);
+        $stmt->execute([(int) $originalHomeSchedule['id']]);
 
-    if ($stmt->rowCount() === 0) {
-        // A zero row count can also mean the values were unchanged.
-        $verify = $db->prepare("
-            SELECT start_time, end_time
-            FROM barber_schedule
-            WHERE id = ?
-        ");
+        $homeScheduleChanged = true;
+    } else {
+        // Create a temporary schedule for this test only.
+        $stmt = $db->prepare("
+        INSERT INTO barber_schedule (
+            barber_id,
+            day,
+            service_location,
+            start_time,
+            end_time
+        ) VALUES (
+            :barber_id,
+            'Tuesday',
+            'HOME',
+            '09:00:00',
+            '21:00:00'
+        )
+    ");
 
-        $verify->execute([(int) $originalHomeSchedule['id']]);
+        $stmt->execute([
+            ':barber_id' => $barberId,
+        ]);
 
-        $current = $verify->fetch(PDO::FETCH_ASSOC);
+        $temporaryHomeScheduleId = (int) $db->lastInsertId();
 
-        if (
-            !$current
-            || $current['start_time'] !== '09:00:00'
-            || $current['end_time'] !== '21:00:00'
-        ) {
+        if ($temporaryHomeScheduleId <= 0) {
             throw new RuntimeException(
-                'Could not configure the temporary HOME schedule.'
+                'Could not create the temporary Tuesday HOME schedule.'
             );
         }
-    }
 
-    $homeScheduleChanged = true;
+        echo "[SETUP] Created temporary Tuesday HOME schedule "
+            . $temporaryHomeScheduleId . "\n";
+    }
 
     /*
      * Test 1: SHOP appointment from 10:00 to 11:00.
@@ -207,10 +219,10 @@ try {
     );
 
     /*
-     * Test 2: HOME appointment from 10:30 to 11:30.
-     * It should be rejected because the SHOP appointment
-     * already occupies 10:00 to 11:00.
-     */
+  * Test 2: HOME appointment from 10:30 to 11:30.
+  * It must be rejected because the SHOP appointment occupies
+  * 10:00 to 11:00.
+  */
     $overlapRejected = false;
 
     try {
@@ -227,15 +239,18 @@ try {
             $homeCustomerId,
             $createdIds
         );
-    } catch (Throwable $e) {
+    } catch (\App\Exceptions\BookingConflictException $e) {
         $overlapRejected = true;
 
-        echo "[INFO] Overlapping HOME booking rejected: "
+        echo "[INFO] Booking conflict detected: "
+            . $e->getMessage() . "\n";
+    } catch (Throwable $e) {
+        echo "[ERROR] Unexpected rejection reason: "
             . $e->getMessage() . "\n";
     }
 
     checkResult(
-        'Overlapping HOME booking at 10:30 is rejected',
+        'Overlapping HOME booking is rejected by the booking conflict rule',
         $overlapRejected
     );
 
@@ -270,8 +285,8 @@ try {
 
 } catch (Throwable $e) {
     echo "[ERROR] " . $e->getMessage() . "\n";
+    echo $e->getTraceAsString() . "\n";
     $failed++;
-
 } finally {
     /*
      * Remove only appointments created and tracked by this test.
@@ -303,15 +318,15 @@ try {
     }
 
     /*
-     * Restore the original HOME schedule.
-     */
+  * Restore the original HOME schedule if it was modified.
+  */
     if ($homeScheduleChanged && $originalHomeSchedule !== null) {
         $stmt = $db->prepare("
-            UPDATE barber_schedule
-            SET start_time = :start_time,
-                end_time = :end_time
-            WHERE id = :id
-        ");
+        UPDATE barber_schedule
+        SET start_time = :start_time,
+            end_time = :end_time
+        WHERE id = :id
+    ");
 
         $stmt->execute([
             ':start_time' => $originalHomeSchedule['start_time'],
@@ -319,24 +334,31 @@ try {
             ':id' => $originalHomeSchedule['id'],
         ]);
 
-        $verify = $db->prepare("
-            SELECT start_time, end_time
-            FROM barber_schedule
-            WHERE id = ?
-        ");
+        echo "[CLEANUP] Original HOME schedule restored\n";
+    }
 
-        $verify->execute([(int) $originalHomeSchedule['id']]);
+    /*
+     * Remove the temporary HOME schedule created by this test.
+     */
+    if ($temporaryHomeScheduleId !== null) {
+        $stmt = $db->prepare("
+        DELETE FROM barber_schedule
+        WHERE id = :id
+          AND barber_id = :barber_id
+          AND day = 'Tuesday'
+          AND service_location = 'HOME'
+    ");
 
-        $restored = $verify->fetch(PDO::FETCH_ASSOC);
+        $stmt->execute([
+            ':id' => $temporaryHomeScheduleId,
+            ':barber_id' => $barberId,
+        ]);
 
-        if (
-            $restored
-            && $restored['start_time'] === $originalHomeSchedule['start_time']
-            && $restored['end_time'] === $originalHomeSchedule['end_time']
-        ) {
-            echo "[CLEANUP] Original HOME schedule restored\n";
+        if ($stmt->rowCount() === 1) {
+            echo "[CLEANUP] Removed temporary HOME schedule "
+                . $temporaryHomeScheduleId . "\n";
         } else {
-            echo "[ERROR] Could not verify restoration of HOME schedule\n";
+            echo "[ERROR] Could not verify removal of temporary HOME schedule\n";
             $failed++;
         }
     }

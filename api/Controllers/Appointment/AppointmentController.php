@@ -8,6 +8,7 @@ use Api\Middleware\AuthMiddleware;
 use App\Repositories\AppointmentRepository;
 use App\Repositories\BarberRepository;
 use App\Repositories\ShopRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
 use App\Services\AppointmentService;
 use Throwable;
 
@@ -20,7 +21,8 @@ class AppointmentController
         $this->appointmentService = new AppointmentService(
             new AppointmentRepository(),
             new BarberRepository(),
-            new ShopRepository()
+            new ShopRepository(),
+            new CustomerBookingRestrictionRepository()
         );
     }
 
@@ -252,6 +254,42 @@ class AppointmentController
             ]);
         }
     }
+
+
+
+    /**
+     * Get appointments assigned to the authenticated barber.
+     *
+     * BARBER only.
+     */
+    public function getBarberAppointments(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+
+        try {
+            $auth = AuthMiddleware::checkRole(['BARBER']);
+            $userId = (int) $auth['user']->id;
+
+            $appointments = $this->appointmentService
+                ->getBarberAppointments($userId);
+
+            http_response_code(200);
+
+            echo json_encode([
+                'status' => 'success',
+                'data' => $appointments
+            ]);
+
+        } catch (Throwable $e) {
+            http_response_code($this->getHttpStatusCode($e));
+
+            echo json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
 
 
     public function cancelAppointment(int $appointmentId): void

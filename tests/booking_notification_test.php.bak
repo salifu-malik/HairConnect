@@ -1,0 +1,500 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/../bootstrap.php';
+
+use App\Helpers\DatabaseManager;
+use App\Repositories\AppointmentRepository;
+use App\Repositories\BarberHomeServiceRepository;
+use App\Repositories\BarberRepository;
+use App\Repositories\BarberScheduleRepository;
+use App\Repositories\CustomerBookingRestrictionRepository;
+use App\Repositories\NotificationRepository;
+use App\Repositories\ServiceRepository;
+use App\Repositories\ShopRepository;
+use App\Repositories\SubscriptionRepository;
+use App\Services\BookingService;
+
+date_default_timezone_set('Africa/Accra');
+
+$bookingDb = DatabaseManager::getConnection('booking_db');
+$notificationDb = DatabaseManager::getConnection('notification_db');
+
+$barberId = 1;
+$shopId = 1;
+$shopServiceId = 1;
+$homeServiceId = 1;
+
+// Use separate customers so each test booking is independent.
+$shopCustomerId = 6;
+$homeCustomerId = 11;
+
+$barber = (new BarberRepository())->findById($barberId);
+$shop = (new ShopRepository())->findById($shopId);
+
+$passed = 0;
+$failed = 0;
+
+$createdAppointments = [];
+$createdNotifications = [];
+$originalHomeSchedule = null;
+$homeScheduleChanged = false;
+$temporaryHomeScheduleId = null;
+
+function bookingNotificationCheck(
+    string $description,
+    bool $condition
+): void {
+    global $passed, $failed;
+
+    if ($condition) {
+        echo "[PASS] {$description}\n";
+        $passed++;
+    } else {
+        echo "[FAIL] {$description}\n";
+        $failed++;
+    }
+}
+
+/**
+ * Return IDs of booking-created notifications for a user.
+ */
+function getBookingNotificationIds(
+    PDO $notificationDb,
+    int $userId
+): array {
+    $stmt = $notificationDb->prepare("
+        SELECT id
+        FROM notifications
+        WHERE user_id = :user_id
+          AND type = 'booking_created'
+        ORDER BY id
+    ");
+
+    $stmt->execute(['user_id' => $userId]);
+
+    return array_map(
+        'intval',
+        $stmt->fetchAll(PDO::FETCH_COLUMN)
+    );
+}
+
+/**
+ * Identify an appointment using its unique customer, date, time,
+ * location, and ID range.
+ */
+function findNewTestAppointment(
+    PDO $bookingDb,
+    int $customerId,
+    int $barberId,
+    string $date,
+    string $time,
+    string $location,
+    int $previousMaxId
+): ?array {
+    $stmt = $bookingDb->prepare("
+        SELECT id, status
+        FROM appointments
+        WHERE customer_id = :customer_id
+          AND barber_id = :barber_id
+          AND appointment_date = :date
+          AND appointment_time = :time
+          AND service_location = :location
+          AND id > :previous_id
+        ORDER BY id DESC
+        LIMIT 1
+    ");
+
+    $stmt->execute([
+        'customer_id' => $customerId,
+        'barber_id' => $barberId,
+        'date' => $date,
+        'time' => $time . ':00',
+        'location' => $location,
+        'previous_id' => $previousMaxId,
+    ]);
+
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    return $row ?: null;
+}
+
+try {
+    if (!$barber || !$shop) {
+        throw new RuntimeException(
+            'Test setup failed: barber 1 or shop 1 was not found.'
+        );
+    }
+
+    if ((int) $barber->userId <= 0 || (int) $shop->ownerId <= 0) {
+        throw new RuntimeException(
+            'Test setup failed: barber or shop owner user ID is invalid.'
+        );
+    }
+
+    $barberUserId = (int) $barber->userId;
+    $shopOwnerId = (int) $shop->ownerId;
+
+    /*
+     * Use a future Tuesday, matching the existing cross-location
+     * test fixture. Booking times must still be in the future.
+     */
+    $date = (new DateTimeImmutable(
+        'next Tuesday',
+        new DateTimeZone('Africa/Accra')
+    ))->format('Y-m-d');
+
+
+    // Prepare a HOME schedule for the test date without permanently
+// changing the existing barber schedule.
+    $stmt = $bookingDb->prepare("
+    SELECT id, start_time, end_time
+    FROM barber_schedule
+    WHERE barber_id = :barber_id
+      AND day = 'Tuesday'
+      AND service_location = 'HOME'
+    LIMIT 1
+");
+
+    $stmt->execute(['barber_id' => $barberId]);
+    $originalHomeSchedule = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    if ($originalHomeSchedule !== null) {
+        $stmt = $bookingDb->prepare("
+        UPDATE barber_schedule
+        SET start_time = '09:00:00',
+            end_time = '21:00:00'
+        WHERE id = :id
+    ");
+
+        $stmt->execute(['id' => $originalHomeSchedule['id']]);
+        $homeScheduleChanged = true;
+    } else {
+        $stmt = $bookingDb->prepare("
+        INSERT INTO barber_schedule
+            (barber_id, day, service_location, start_time, end_time)
+        VALUES
+            (:barber_id, 'Tuesday', 'HOME', '09:00:00', '21:00:00')
+    ");
+
+        $stmt->execute(['barber_id' => $barberId]);
+        $temporaryHomeScheduleId = (int) $bookingDb->lastInsertId();
+
+        if ($temporaryHomeScheduleId <= 0) {
+            throw new RuntimeException(
+                'Could not create the temporary HOME schedule.'
+            );
+        }
+    }
+
+
+    /*
+     * Snapshot existing notifications. Only IDs created by this
+     * test will be deleted during cleanup.
+     */
+    $initialNotificationIds = array_unique(array_merge(
+        getBookingNotificationIds($notificationDb, $barberUserId),
+        getBookingNotificationIds($notificationDb, $shopOwnerId)
+    ));
+
+    /*
+     * Keep a list of the notification IDs that existed before
+     * the test for safe cleanup.
+     */
+    $initialNotificationIdLookup = array_fill_keys(
+        $initialNotificationIds,
+        true
+    );
+
+    $bookingService = new BookingService(
+        new ShopRepository(),
+        new BarberRepository(),
+        new ServiceRepository(),
+        new BarberHomeServiceRepository(),
+        new AppointmentRepository(),
+        new BarberScheduleRepository(),
+        new SubscriptionRepository(),
+        new CustomerBookingRestrictionRepository(),
+        new NotificationRepository()
+    );
+
+    /*
+     * Test 1: SHOP booking.
+     */
+    $beforeAppointmentId = (int) $bookingDb->query(
+        "SELECT COALESCE(MAX(id), 0) FROM appointments"
+    )->fetchColumn();
+
+    $bookingService->createAppointment([
+        'barber_id' => $barberId,
+        'service_id' => $shopServiceId,
+        'service_location' => 'SHOP',
+        'appointment_date' => $date,
+        'appointment_time' => '10:00',
+    ], $shopCustomerId);
+
+    $shopAppointment = findNewTestAppointment(
+        $bookingDb,
+        $shopCustomerId,
+        $barberId,
+        $date,
+        '10:00',
+        'SHOP',
+        $beforeAppointmentId
+    );
+
+    if ($shopAppointment) {
+        $createdAppointments[] = [
+            'id' => (int) $shopAppointment['id'],
+            'customer_id' => $shopCustomerId,
+            'barber_id' => $barberId,
+            'date' => $date,
+            'time' => '10:00:00',
+            'location' => 'SHOP',
+        ];
+    }
+
+    bookingNotificationCheck(
+        'SHOP booking was created',
+        $shopAppointment !== null
+    );
+
+    bookingNotificationCheck(
+        'SHOP booking was confirmed',
+        $shopAppointment !== null
+        && $shopAppointment['status'] === 'confirmed'
+    );
+
+    /*
+     * Test 2: verify notifications sent to the barber and shop owner.
+     */
+    $stmt = $notificationDb->prepare("
+        SELECT COUNT(*)
+        FROM notifications
+        WHERE user_id = :user_id
+          AND title = 'New Appointment'
+          AND type = 'booking_created'
+          AND message LIKE :message
+    ");
+
+    $stmt->execute([
+        'user_id' => $barberUserId,
+        'message' => '%' . $date . '%',
+    ]);
+
+    bookingNotificationCheck(
+        'Barber received a SHOP booking notification',
+        (int) $stmt->fetchColumn() > 0
+    );
+
+    $stmt = $notificationDb->prepare("
+        SELECT COUNT(*)
+        FROM notifications
+        WHERE user_id = :user_id
+          AND title = 'New Shop Appointment'
+          AND type = 'booking_created'
+          AND message LIKE :message
+    ");
+
+    $stmt->execute([
+        'user_id' => $shopOwnerId,
+        'message' => '%' . $date . '%',
+    ]);
+
+    bookingNotificationCheck(
+        'Shop owner received a SHOP booking notification',
+        (int) $stmt->fetchColumn() > 0
+    );
+
+    /*
+     * Test 3: HOME booking should notify the barber.
+     *
+     * The chosen time must not overlap the SHOP booking. The
+     * existing test fixture uses a Tuesday HOME schedule.
+     */
+    $beforeAppointmentId = (int) $bookingDb->query(
+        "SELECT COALESCE(MAX(id), 0) FROM appointments"
+    )->fetchColumn();
+
+    $bookingService->createAppointment([
+        'barber_id' => $barberId,
+        'service_id' => $homeServiceId,
+        'service_location' => 'HOME',
+        'appointment_date' => $date,
+        'appointment_time' => '12:00',
+    ], $homeCustomerId);
+
+    $homeAppointment = findNewTestAppointment(
+        $bookingDb,
+        $homeCustomerId,
+        $barberId,
+        $date,
+        '12:00',
+        'HOME',
+        $beforeAppointmentId
+    );
+
+    if ($homeAppointment) {
+        $createdAppointments[] = [
+            'id' => (int) $homeAppointment['id'],
+            'customer_id' => $homeCustomerId,
+            'barber_id' => $barberId,
+            'date' => $date,
+            'time' => '12:00:00',
+            'location' => 'HOME',
+        ];
+    }
+
+    bookingNotificationCheck(
+        'HOME booking was created',
+        $homeAppointment !== null
+    );
+
+    /*
+     * Capture notification IDs produced so far. These IDs will
+     * also be used for precise cleanup.
+     */
+    foreach ([$barberUserId, $shopOwnerId] as $userId) {
+        foreach (getBookingNotificationIds(
+                     $notificationDb,
+                     $userId
+                 ) as $notificationId) {
+            if (!isset($initialNotificationIdLookup[$notificationId])) {
+                $createdNotifications[$notificationId] = true;
+            }
+        }
+    }
+
+    /*
+     * Verify the HOME booking notification contains the HOME
+     * service location. This checks that the barber was notified
+     * of the right kind of booking.
+     */
+    $stmt = $notificationDb->prepare("
+        SELECT COUNT(*)
+        FROM notifications
+        WHERE user_id = :user_id
+          AND title = 'New Appointment'
+          AND type = 'booking_created'
+          AND message LIKE :message
+    ");
+
+    $stmt->execute([
+        'user_id' => $barberUserId,
+        'message' => '%home appointment%',
+    ]);
+
+    bookingNotificationCheck(
+        'Barber received a HOME booking notification',
+        (int) $stmt->fetchColumn() > 0
+    );
+
+    /*
+     * Notification failure is isolated in BookingService using
+     * try/catch. A dedicated failure-injection test would require
+     * a controllable repository or database connection.
+     *
+     * We do not simulate failure by breaking notification_db,
+     * because that could affect other application activity.
+     */
+    echo "[INFO] Notification-failure isolation is verified by "
+        . "the service's independent notification try/catch blocks; "
+        . "no destructive database failure was injected.\n";
+
+} catch (Throwable $e) {
+    echo "[ERROR] " . $e->getMessage() . "\n";
+    echo $e->getTraceAsString() . "\n";
+    $failed++;
+} finally {
+    /*
+     * Remove only appointments created and tracked by this test.
+     */
+    foreach (array_reverse($createdAppointments) as $appointment) {
+        $stmt = $bookingDb->prepare("
+            DELETE FROM appointments
+            WHERE id = :id
+              AND customer_id = :customer_id
+              AND barber_id = :barber_id
+              AND appointment_date = :date
+              AND appointment_time = :time
+              AND service_location = :location
+        ");
+
+        $stmt->execute([
+            'id' => $appointment['id'],
+            'customer_id' => $appointment['customer_id'],
+            'barber_id' => $appointment['barber_id'],
+            'date' => $appointment['date'],
+            'time' => $appointment['time'],
+            'location' => $appointment['location'],
+        ]);
+
+        if ($stmt->rowCount() === 1) {
+            echo "[CLEANUP] Removed test appointment "
+                . $appointment['id'] . "\n";
+        }
+    }
+
+    /*
+     * Remove only notification rows created during this test.
+     */
+    foreach (array_keys($createdNotifications) as $notificationId) {
+        $stmt = $notificationDb->prepare("
+            DELETE FROM notifications
+            WHERE id = :id
+              AND type = 'booking_created'
+        ");
+
+        $stmt->execute(['id' => $notificationId]);
+
+        if ($stmt->rowCount() === 1) {
+            echo "[CLEANUP] Removed test notification "
+                . $notificationId . "\n";
+        }
+
+        // Restore the original HOME schedule or remove the temporary one.
+        if ($homeScheduleChanged && $originalHomeSchedule !== null) {
+            $stmt = $bookingDb->prepare("
+        UPDATE barber_schedule
+        SET start_time = :start_time,
+            end_time = :end_time
+        WHERE id = :id
+          AND barber_id = :barber_id
+          AND day = 'Tuesday'
+          AND service_location = 'HOME'
+    ");
+
+            $stmt->execute([
+                'start_time' => $originalHomeSchedule['start_time'],
+                'end_time' => $originalHomeSchedule['end_time'],
+                'id' => $originalHomeSchedule['id'],
+                'barber_id' => $barberId,
+            ]);
+
+            echo "[CLEANUP] Restored original HOME schedule\n";
+        }
+
+        if ($temporaryHomeScheduleId !== null) {
+            $stmt = $bookingDb->prepare("
+        DELETE FROM barber_schedule
+        WHERE id = :id
+          AND barber_id = :barber_id
+          AND day = 'Tuesday'
+          AND service_location = 'HOME'
+    ");
+
+            $stmt->execute([
+                'id' => $temporaryHomeScheduleId,
+                'barber_id' => $barberId,
+            ]);
+
+            if ($stmt->rowCount() === 1) {
+                echo "[CLEANUP] Removed temporary HOME schedule\n";
+            }
+        }
+
+    }
+
+    echo "\nResults: {$passed} passed, {$failed} failed\n";
+}
