@@ -62,48 +62,108 @@ class ConversationRepository
         return $conversation ?: null;
     }
 
-    //List conversations belonging to a user.
+    // List conversations belonging to a user, including the other participant's details.
     public function findAllForParticipant(int $userId): array
     {
         $stmt = $this->db->prepare("
-            SELECT
-                c.*,
-                (
-                    SELECT m.content
-                    FROM messages m
-                    WHERE m.conversation_id = c.id
-                    ORDER BY m.created_at DESC, m.id DESC
-                    LIMIT 1
-                ) AS last_message,
-                (
-                    SELECT m.created_at
-                    FROM messages m
-                    WHERE m.conversation_id = c.id
-                    ORDER BY m.created_at DESC, m.id DESC
-                    LIMIT 1
-                ) AS last_message_at
-            FROM conversations c
-            WHERE c.deleted_at IS NULL
-              AND (
-                  c.participant_one_id = :user_one
-                  OR c.participant_two_id = :user_two
-              )
-              AND (
-                  c.conversation_type = 'COMPLAINT'
-                  OR c.expires_at IS NULL
-                  OR c.expires_at > UTC_TIMESTAMP()
-              )
-            ORDER BY
-                COALESCE(c.updated_at, c.created_at) DESC,
-                c.id DESC
-        ");
+        SELECT
+            c.*,
+
+            CASE
+                WHEN c.participant_one_id = :current_user_name
+                    THEN c.participant_two_id
+                ELSE c.participant_one_id
+            END AS recipient_id,
+
+            (
+                SELECT m.content
+                FROM messages m
+                WHERE m.conversation_id = c.id
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT 1
+            ) AS last_message,
+
+            (
+                SELECT m.created_at
+                FROM messages m
+                WHERE m.conversation_id = c.id
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT 1
+            ) AS last_message_at
+
+        FROM conversations c
+
+        WHERE c.deleted_at IS NULL
+          AND (
+              c.participant_one_id = :user_one
+              OR c.participant_two_id = :user_two
+          )
+          AND (
+              c.conversation_type = 'COMPLAINT'
+              OR c.expires_at IS NULL
+              OR c.expires_at > UTC_TIMESTAMP()
+          )
+
+        ORDER BY
+            COALESCE(c.updated_at, c.created_at) DESC,
+            c.id DESC
+    ");
 
         $stmt->execute([
+            'current_user_name' => $userId,
             'user_one' => $userId,
             'user_two' => $userId,
         ]);
 
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $conversations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (!$conversations) {
+            return [];
+        }
+
+        // Fetch participant details from users_db.
+        $usersDb = DatabaseManager::getConnection('users_db');
+
+        $userIds = [];
+
+        foreach ($conversations as $conversation) {
+            $userIds[] = (int) $conversation['recipient_id'];
+        }
+
+        $userIds = array_values(array_unique($userIds));
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+
+        $usersStmt = $usersDb->prepare("
+        SELECT id, first_name, last_name, profile_image
+        FROM users
+        WHERE id IN ($placeholders)
+    ");
+
+        $usersStmt->execute($userIds);
+
+        $usersById = [];
+
+        foreach ($usersStmt->fetchAll(PDO::FETCH_ASSOC) as $user) {
+            $usersById[(int) $user['id']] = $user;
+        }
+
+        foreach ($conversations as &$conversation) {
+            $recipientId = (int) $conversation['recipient_id'];
+            $recipient = $usersById[$recipientId] ?? null;
+
+            $conversation['recipient_name'] = $recipient
+                ? trim($recipient['first_name'] . ' ' . $recipient['last_name'])
+                : 'Unknown user';
+
+            $conversation['recipientName'] = $conversation['recipient_name'];
+
+            $conversation['recipient_profile_image'] =
+                $recipient['profile_image'] ?? null;
+        }
+
+        unset($conversation);
+
+        return $conversations;
     }
 
     /**
