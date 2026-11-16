@@ -11,6 +11,7 @@ use App\Repositories\ShopRepository;
 use App\Repositories\CustomerBookingRestrictionRepository;
 use App\Repositories\SubscriptionRepository;
 use App\Repositories\NotificationRepository;
+use App\Repositories\BarberShopMembershipRepository;
 use App\Exceptions\BookingConflictException;
 use DateTime;
 use DateTimeImmutable;
@@ -29,6 +30,7 @@ class BookingService
     private BarberScheduleRepository $barberScheduleRepository;
     private SubscriptionRepository $subscriptionRepository;
     private ?NotificationRepository $notificationRepository;
+    private BarberShopMembershipRepository $membershipRepository;
 //    private NotificationRepository $notificationRepository;
 
     public function __construct(
@@ -40,6 +42,7 @@ class BookingService
         BarberScheduleRepository $barberScheduleRepository,
         SubscriptionRepository $subscriptionRepository,
         CustomerBookingRestrictionRepository $restrictionRepository,
+        BarberShopMembershipRepository $membershipRepository,
         ?NotificationRepository $notificationRepository = null
 //        NotificationRepository $notificationRepository = new NotificationRepository()
 //        NotificationRepository $notificationRepository
@@ -52,7 +55,9 @@ class BookingService
         $this->barberScheduleRepository = $barberScheduleRepository;
         $this->subscriptionRepository = $subscriptionRepository;
         $this->restrictionRepository = $restrictionRepository;
+        $this->membershipRepository = $membershipRepository;
         $this->notificationRepository = $notificationRepository;
+
     }
 
     /**
@@ -985,6 +990,9 @@ class BookingService
 
     /**
      * Find and validate a bookable barber.
+     *
+     * Subscription eligibility is checked separately according
+     * to the requested service location.
      */
     private function getBookableBarber(int $barberId)
     {
@@ -1010,89 +1018,114 @@ class BookingService
             );
         }
 
-        /*
-         * Independent barbers are responsible for their own
-         * HairConnect subscription.
-         *
-         * Barbers working under a shop do not require an
-         * individual barber subscription because the shop
-         * owner holds the platform subscription.
-         */
-        if (
-            $barber->shopId === null
-            && !$this->subscriptionRepository->hasActiveSubscription(
-                $barber->userId
-            )
-        ) {
-            throw new Exception(
-                'This independent barber does not have an active subscription.'
-            );
-        }
-
         return $barber;
     }
 
     /**
-     * Resolve and validate the barber's shop.
+     * Resolve and validate the barber's shop and service entitlement.
      *
-     * Returns null for an independent barber providing HOME service.
+     * HOME services require the barber's personal HOME entitlement.
+     * SHOP services require an active shop membership and the
+     * shop's SHOP entitlement.
      */
     private function getBookableShopForBarber(
         $barber,
         string $serviceLocation
     ) {
-        $shop = null;
-
-        if ($barber->shopId !== null) {
-            $shop = $this->shopRepository->findById(
-                $barber->shopId
-            );
-
-            if (!$shop) {
-                throw new Exception(
-                    'The barber is not attached to a valid shop.'
-                );
-            }
-
-            if ($shop->approvalStatus !== 'approved') {
-                throw new Exception(
-                    'This shop has not been approved yet.'
-                );
-            }
-
-            if ($shop->status !== 'active') {
-                throw new Exception(
-                    'This shop is currently unavailable.'
-                );
-            }
-
-            /*
- * Shop-based barbers rely on the shop owner's
- * HairConnect subscription.
- *
- * The barber does not need an individual subscription
- * while working under the shop.
- */
+        /*
+         * HOME services belong to the barber's personal entitlement.
+         *
+         * Shop affiliation must not affect HOME service eligibility.
+         */
+        if ($serviceLocation === 'HOME') {
             if (
-                !$this->subscriptionRepository->hasActiveSubscription(
-                    $shop->ownerId
+                !$this->subscriptionRepository->hasActiveEntitlement(
+                    'BARBER',
+                    (int) $barber->id,
+                    'HOME'
                 )
             ) {
                 throw new Exception(
-                    'This shop owner does not have an active HairConnect subscription.'
+                    'This barber does not have an active HOME subscription.'
                 );
             }
+
+            return null;
+        }
+
+        /*
+         * Reject unsupported service locations.
+         */
+        if ($serviceLocation !== 'SHOP') {
+            throw new Exception(
+                'Invalid service location.'
+            );
         }
 
         /*
          * Independent barbers cannot provide SHOP services.
          */
-        if (
-            $serviceLocation === 'SHOP' &&
-            $barber->shopId === null
-        ) {
+        if ($barber->shopId === null) {
             throw new Exception(
                 'Independent barbers cannot provide shop services.'
+            );
+        }
+
+        /*
+         * Resolve the barber's assigned shop.
+         */
+        $shop = $this->shopRepository->findById(
+            $barber->shopId
+        );
+
+        if (!$shop) {
+            throw new Exception(
+                'The barber is not attached to a valid shop.'
+            );
+        }
+
+        if ($shop->approvalStatus !== 'approved') {
+            throw new Exception(
+                'This shop has not been approved yet.'
+            );
+        }
+
+        if ($shop->status !== 'active') {
+            throw new Exception(
+                'This shop is currently unavailable.'
+            );
+        }
+
+        /*
+         * Verify that the barber has an active membership
+         * in this exact shop.
+         */
+        $membership = $this->membershipRepository->findActiveByBarberId(
+            (int) $barber->id
+        );
+
+        if (
+            !$membership ||
+            (int) $membership['shop_id'] !== (int) $shop->id
+        ) {
+            throw new Exception(
+                'This barber does not have an active membership in this shop.'
+            );
+        }
+
+        /*
+         * The shop, not the shop owner's personal account,
+         * is the beneficiary of the SHOP subscription.
+         */
+        if (
+            !$this->subscriptionRepository->hasActiveEntitlement(
+                'SHOP',
+                (int) $shop->id,
+                'SHOP'
+            )
+        ) {
+            throw new Exception(
+                'This shop owner does not have an active HairConnect subscription.'
             );
         }
 

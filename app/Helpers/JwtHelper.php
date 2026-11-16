@@ -49,9 +49,7 @@ class JwtHelper
         if (self::$publicKey === null) {
 
             $path = __DIR__ . '/../../keys/public.pem';
-            error_log("JWT PRIVATE KEY PATH: " . $path);
-            error_log("JWT PRIVATE KEY EXISTS: " . (is_file($path) ? 'YES' : 'NO'));
-            error_log("JWT PRIVATE KEY READABLE: " . (is_readable($path) ? 'YES' : 'NO'));
+
 
             if (!is_file($path)) {
                 throw new RuntimeException(

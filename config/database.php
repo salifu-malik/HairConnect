@@ -35,7 +35,7 @@ return [
         ],
         'subscription_db' => [
             'host' => $_ENV['DB_HOST'],
-            'dbname' => 'subscription_db',
+            'dbname' => $_ENV['SUBSCRIPTION_DB_NAME'] ?? 'subscription_db',
             'user' => $_ENV['DB_USER'],
             'password' => $_ENV['DB_PASSWORD'],
         ],

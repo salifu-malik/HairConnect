@@ -34,6 +34,59 @@ class ConversationRepository
         return $conversation ?: null;
     }
 
+
+    /**
+     * Find a conversation by its public UUID.
+     */
+    public function findByPublicId(string $publicId): ?array
+    {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM conversations
+        WHERE public_id = :public_id
+          AND deleted_at IS NULL
+        LIMIT 1
+    ");
+
+        $stmt->execute(['public_id' => $publicId]);
+
+        $conversation = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $conversation ?: null;
+    }
+
+    /**
+     * Find a conversation by public UUID only when
+     * the specified user is a participant.
+     */
+    public function findForParticipantByPublicId(
+        string $publicId,
+        int $userId
+    ): ?array {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM conversations
+        WHERE public_id = :public_id
+          AND deleted_at IS NULL
+          AND (
+              participant_one_id = :user_one
+              OR participant_two_id = :user_two
+          )
+        LIMIT 1
+    ");
+
+        $stmt->execute([
+            'public_id' => $publicId,
+            'user_one' => $userId,
+            'user_two' => $userId,
+        ]);
+
+        $conversation = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $conversation ?: null;
+    }
+
+
      //Find a conversation only when the current user is a participant.
     public function findForParticipant(
         int $conversationId,
@@ -134,10 +187,10 @@ class ConversationRepository
         $placeholders = implode(',', array_fill(0, count($userIds), '?'));
 
         $usersStmt = $usersDb->prepare("
-        SELECT id, first_name, last_name, profile_image
-        FROM users
-        WHERE id IN ($placeholders)
-    ");
+    SELECT id, public_id, first_name, last_name, profile_image
+    FROM users
+    WHERE id IN ($placeholders)
+");
 
         $usersStmt->execute($userIds);
 
@@ -147,23 +200,31 @@ class ConversationRepository
             $usersById[(int) $user['id']] = $user;
         }
 
-        foreach ($conversations as &$conversation) {
+        $safeConversations = [];
+
+        foreach ($conversations as $conversation) {
             $recipientId = (int) $conversation['recipient_id'];
             $recipient = $usersById[$recipientId] ?? null;
 
-            $conversation['recipient_name'] = $recipient
-                ? trim($recipient['first_name'] . ' ' . $recipient['last_name'])
-                : 'Unknown user';
-
-            $conversation['recipientName'] = $conversation['recipient_name'];
-
-            $conversation['recipient_profile_image'] =
-                $recipient['profile_image'] ?? null;
+            $safeConversations[] = [
+                'conversation_id' => $conversation['public_id'],
+                'conversation_type' => $conversation['conversation_type'],
+                'recipient_id' => $recipient['public_id'] ?? null,
+                'recipient_name' => $recipient
+                    ? trim(
+                        $recipient['first_name'] . ' ' . $recipient['last_name']
+                    )
+                    : 'Unknown user',
+                'recipient_profile_image' => $recipient['profile_image'] ?? null,
+                'last_message' => $conversation['last_message'] ?? null,
+                'last_message_at' => $conversation['last_message_at'] ?? null,
+                'created_at' => $conversation['created_at'],
+                'updated_at' => $conversation['updated_at'],
+                'expires_at' => $conversation['expires_at'],
+            ];
         }
 
-        unset($conversation);
-
-        return $conversations;
+        return $safeConversations;
     }
 
     /**
@@ -319,22 +380,24 @@ class ConversationRepository
         }
 
         $stmt = $this->db->prepare("
-            INSERT INTO conversations (
-                conversation_type,
-                participant_one_id,
-                participant_two_id,
-                related_order_id,
-                related_appointment_id,
-                created_by
-            ) VALUES (
-                :type,
-                :participant_one,
-                :participant_two,
-                :order_id,
-                :appointment_id,
-                :created_by
-            )
-        ");
+    INSERT INTO conversations (
+        public_id,
+        conversation_type,
+        participant_one_id,
+        participant_two_id,
+        related_order_id,
+        related_appointment_id,
+        created_by
+    ) VALUES (
+        UUID(),
+        :type,
+        :participant_one,
+        :participant_two,
+        :order_id,
+        :appointment_id,
+        :created_by
+    )
+");
 
         $stmt->execute([
             'type' => $type,

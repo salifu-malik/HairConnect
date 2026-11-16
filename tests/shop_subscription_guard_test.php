@@ -20,11 +20,34 @@ use App\Services\BookingService;
  */
 class InactiveSubscriptionRepository extends SubscriptionRepository
 {
-    public function hasActiveSubscription(int $userId): bool
-    {
+    public function hasActiveEntitlement(
+        string $beneficiaryType,
+        int $beneficiaryId,
+        string $scope
+    ): bool {
         return false;
     }
 }
+
+
+class ActiveShopMembershipFixtureRepository extends \App\Repositories\BarberShopMembershipRepository
+{
+    public function findActiveByBarberId(int $barberId): ?array
+    {
+        if ($barberId !== 1) {
+            return null;
+        }
+
+        return [
+            'id' => 999,
+            'barber_id' => 1,
+            'shop_id' => 1,
+            'status' => 'active',
+        ];
+    }
+}
+
+
 
 $bookingService = new BookingService(
     new ShopRepository(),
@@ -34,7 +57,8 @@ $bookingService = new BookingService(
     new AppointmentRepository(),
     new BarberScheduleRepository(),
     new InactiveSubscriptionRepository(),
-    new CustomerBookingRestrictionRepository()
+    new CustomerBookingRestrictionRepository(),
+    new ActiveShopMembershipFixtureRepository()
 );
 
 $expectedMessage =

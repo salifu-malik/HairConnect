@@ -79,6 +79,37 @@ class SubscriptionPaymentRepository
         return new SubscriptionPayment($data);
     }
 
+
+    /**
+     * Find and lock a subscription payment.
+     *
+     * Must be called inside an active database transaction.
+     */
+    public function findByIdForUpdate(
+        int $paymentId
+    ): ?SubscriptionPayment {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM subscription_payments
+        WHERE id = :id
+        LIMIT 1
+        FOR UPDATE
+    ");
+
+        $stmt->execute([
+            'id' => $paymentId
+        ]);
+
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$data) {
+            return null;
+        }
+
+        return new SubscriptionPayment($data);
+    }
+
+
     public function findByReference(
         string $reference
     ): ?SubscriptionPayment {
@@ -102,48 +133,135 @@ class SubscriptionPaymentRepository
         return new SubscriptionPayment($data);
     }
 
+
+    public function findByReferenceForUpdate(
+        string $reference
+    ): ?SubscriptionPayment {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM subscription_payments
+        WHERE reference = :reference
+        LIMIT 1
+        FOR UPDATE
+    ");
+
+        $stmt->execute([
+            'reference' => $reference
+        ]);
+
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$data) {
+            return null;
+        }
+
+        return new SubscriptionPayment($data);
+    }
+
+
     /**
      * Update the Paystack transaction reference
      * for an existing subscription payment.
      */
     public function updateReference(
         int $paymentId,
-        string $reference
+        string $expectedReference,
+        string $newReference
     ): bool {
-        $stmt = $this->db->prepare(
-            "UPDATE subscription_payments
-         SET reference = :reference
-         WHERE id = :id"
-        );
 
-        return $stmt->execute([
-            ':reference' => $reference,
-            ':id' => $paymentId
+        $stmt = $this->db->prepare("
+        UPDATE subscription_payments
+        SET reference = :new_reference
+        WHERE id = :id
+          AND reference = :expected_reference
+          AND status = 'pending'
+    ");
+
+        $stmt->execute([
+            'new_reference' => $newReference,
+            'id' => $paymentId,
+            'expected_reference' => $expectedReference
         ]);
+
+        return $stmt->rowCount() === 1;
     }
 
     public function updateStatus(
         int $paymentId,
         string $status
     ): bool {
+        $allowedStatuses = [
+            'pending',
+            'completed',
+            'failed',
+        ];
+
+        if (!in_array($status, $allowedStatuses, true)) {
+            throw new \InvalidArgumentException(
+                'Invalid subscription payment status.'
+            );
+        }
+
         $paidAt = $status === 'completed'
-            ? date('Y-m-d H:i:s')
+            ? gmdate('Y-m-d H:i:s')
             : null;
 
         $stmt = $this->db->prepare("
-            UPDATE subscription_payments
-            SET
-                status = :status,
-                paid_at = :paid_at
-            WHERE id = :id
-        ");
+        UPDATE subscription_payments
+        SET
+            status = :status,
+            paid_at = :paid_at
+        WHERE id = :id
+          AND status = 'pending'
+    ");
 
-        return $stmt->execute([
+        $stmt->execute([
             'status' => $status,
             'paid_at' => $paidAt,
-            'id' => $paymentId
+            'id' => $paymentId,
         ]);
+
+        return $stmt->rowCount() === 1;
     }
+
+    /**
+     * Complete a payment and permanently associate
+     * the attempt responsible for subscription activation.
+     *
+     * Must be called inside the verification transaction.
+     */
+    public function completeWithActivatedAttempt(
+        int $paymentId,
+        int $attemptId
+    ): bool {
+        $stmt = $this->db->prepare("
+        UPDATE subscription_payments AS sp
+       SET
+        status = 'completed',
+        paid_at = UTC_TIMESTAMP(),
+        activated_attempt_id = :attempt_id
+        WHERE sp.id = :payment_id
+          AND sp.status = 'pending'
+          AND sp.activated_attempt_id IS NULL
+          AND EXISTS (
+              SELECT 1
+              FROM subscription_payment_attempts AS spa
+              WHERE spa.id = :attempt_id_check
+                AND spa.payment_id = sp.id
+                AND spa.status = 'succeeded'
+                AND spa.reconciliation_status = 'not_required'
+          )
+    ");
+
+        $stmt->execute([
+            'attempt_id' => $attemptId,
+            'payment_id' => $paymentId,
+            'attempt_id_check' => $attemptId,
+        ]);
+
+        return $stmt->rowCount() === 1;
+    }
+
 
     public function findBySubscriptionId(
         int $subscriptionId

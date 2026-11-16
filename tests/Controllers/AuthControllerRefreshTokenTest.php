@@ -8,6 +8,7 @@ use Api\Controllers\Auth\AuthController;
 use App\Helpers\RefreshTokenCookieManagerInterface;
 use App\Services\AuthService;
 use App\Exceptions\AuthenticationException;
+use App\Exceptions\EmailNotVerifiedException;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -337,4 +338,44 @@ final class AuthControllerRefreshTokenTest extends TestCase
         $this->assertSame(500, http_response_code());
         $this->assertSame('error', $response['status']);
     }
+
+    public function testUnverifiedEmailRefreshReturns403WithoutRotatingCookie(): void
+    {
+        $_COOKIE['refresh_token'] = 'unverified-test-refresh-token';
+
+        $authService = $this->createMock(AuthService::class);
+
+        $authService
+            ->expects($this->once())
+            ->method('refresh')
+            ->with('unverified-test-refresh-token')
+            ->willThrowException(
+                new EmailNotVerifiedException('Email verification is required.')
+            );
+
+        $cookieManager = $this->createMock(
+            RefreshTokenCookieManagerInterface::class
+        );
+
+        $cookieManager
+            ->expects($this->never())
+            ->method('set');
+
+        $controller = $this->makeController(
+            $authService,
+            $cookieManager
+        );
+
+        $response = $this->captureResponse(
+            fn() => $controller->refresh()
+        );
+
+        $this->assertSame(403, http_response_code());
+        $this->assertSame('error', $response['status']);
+        $this->assertSame(
+            'Email verification is required.',
+            $response['message']
+        );
+    }
+
 }

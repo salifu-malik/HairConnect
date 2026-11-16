@@ -51,6 +51,8 @@ use Api\Controllers\Barber\HomeServiceController;
 use Api\Controllers\Store\StoreController;
 use Api\Controllers\Chat\ChatController;
 use App\Repositories\PlanRepository;
+use App\Repositories\BarberRepository;
+use App\Repositories\ShopRepository;
 use App\Repositories\PlanVersionRepository;
 use App\Repositories\SubscriptionRepository;
 use App\Repositories\SubscriptionPaymentRepository;
@@ -71,10 +73,11 @@ $subscriptionService = new SubscriptionService(
     new SubscriptionRepository(),
     new SubscriptionPaymentRepository(),
     new UserRepository(),
+    new BarberRepository(),
+    new ShopRepository(),
     new SubscriptionEventRepository(),
     new PaystackService()
 );
-
 
 
 $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
@@ -683,16 +686,24 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
 
 
 } elseif (
-    preg_match('#^/api/chat/messages/([0-9]+)$#', $requestUri, $matches)
+    preg_match(
+        '#^/api/chat/messages/([0-9a-fA-F-]{36})$#',
+        $requestUri,
+        $matches
+    )
     && $requestMethod === 'GET'
 ) {
-    (new ChatController())->getMessages((int) $matches[1]);
+    (new ChatController())->getMessages($matches[1]);
 
 } elseif (
-    preg_match('#^/api/chat/messages/([0-9]+)$#', $requestUri, $matches)
+    preg_match(
+        '#^/api/chat/messages/([0-9a-fA-F-]{36})$#',
+        $requestUri,
+        $matches
+    )
     && $requestMethod === 'POST'
 ) {
-    (new ChatController())->sendMessage((int) $matches[1]);
+    (new ChatController())->sendMessage($matches[1]);
 
 } elseif (
     $requestUri === '/api/chat/complaints'
@@ -701,21 +712,36 @@ if ($requestUri === '/api/auth/register' && $requestMethod === 'POST') {
     (new ChatController())->createComplaint();
 
 } elseif (
-    preg_match('#^/api/chat/chats/([0-9]+)$#', $requestUri, $matches)
+    preg_match(
+        '#^/api/chat/chats/([0-9a-fA-F-]{36})$#',
+        $requestUri,
+        $matches
+    )
     && $requestMethod === 'DELETE'
 ) {
-    (new ChatController())->deleteComplaint((int) $matches[1]);
-} elseif (
-    preg_match('#^/api/chat/messages/([0-9]+)/delivered$#', $requestUri, $matches)
-    && $requestMethod === 'POST'
-) {
-    (new ChatController())->markMessagesAsDelivered((int) $matches[1]);
+    (new ChatController())->deleteComplaint($matches[1]);
+
 
 } elseif (
-    preg_match('#^/api/chat/messages/([0-9]+)/read$#', $requestUri, $matches)
+    preg_match(
+        '#^/api/chat/messages/([0-9a-fA-F-]{36})/delivered$#',
+        $requestUri,
+        $matches
+    )
     && $requestMethod === 'POST'
 ) {
-    (new ChatController())->markMessagesAsRead((int) $matches[1]);
+    (new ChatController())->markMessagesAsDelivered($matches[1]);
+
+
+} elseif (
+    preg_match(
+        '#^/api/chat/messages/([0-9a-fA-F-]{36})/read$#',
+        $requestUri,
+        $matches
+    )
+    && $requestMethod === 'POST'
+) {
+    (new ChatController())->markMessagesAsRead($matches[1]);
 
     //404
 } else {

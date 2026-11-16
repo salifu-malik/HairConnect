@@ -41,7 +41,8 @@ $bookingService = new BookingService(
     new AppointmentRepository(),
     new BarberScheduleRepository(),
     new SubscriptionRepository(),
-    new CustomerBookingRestrictionRepository()
+    new CustomerBookingRestrictionRepository(),
+    new \App\Repositories\BarberShopMembershipRepository()
 );
 
 /**

@@ -61,6 +61,34 @@ class PlanRepository
         return new Plan($data);
     }
 
+
+    public function findByRoleAndScope(
+        string $role,
+        string $scope
+    ): ?Plan {
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM plans
+        WHERE role = :role
+          AND scope = :scope
+        LIMIT 1
+    ");
+
+        $stmt->execute([
+            'role' => $role,
+            'scope' => $scope
+        ]);
+
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$data) {
+            return null;
+        }
+
+        return new Plan($data);
+    }
+
+
     public function findAll(): array
     {
         $stmt = $this->db->query("

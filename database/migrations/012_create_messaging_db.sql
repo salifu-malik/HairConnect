@@ -117,24 +117,17 @@ CREATE TABLE IF NOT EXISTS messages (
     ) ENGINE=InnoDB;
 
 
--- Retains a record of administrative deletions without retaining
--- the deleted conversation's message contents.
+-- Records deletion metadata without retaining deleted message contents.
+-- deleted_by is NULL for automatic cleanup and the actual user ID for manual deletion.
 CREATE TABLE IF NOT EXISTS conversation_deletion_audit (
                                                            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-
                                                            original_conversation_id BIGINT UNSIGNED NOT NULL,
-                                                           deleted_by INT NOT NULL,
-
-                                                           deleted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-                                                           INDEX idx_deletion_audit_conversation (
-                                                           original_conversation_id
-),
-
-    INDEX idx_deletion_audit_actor (
-                                       deleted_by,
-                                       deleted_at
-                                   )
+                                                           deleted_by INT NULL,
+                                                           deletion_source ENUM('MANUAL', 'AUTOMATIC_EXPIRY')
+    NOT NULL DEFAULT 'MANUAL',
+    deleted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_deletion_audit_conversation (original_conversation_id),
+    INDEX idx_deletion_audit_actor (deleted_by, deleted_at)
     ) ENGINE=InnoDB;
 
 
@@ -142,3 +135,23 @@ ALTER TABLE messages
     ADD COLUMN delivered_at DATETIME NULL DEFAULT NULL,
     ADD COLUMN read_at DATETIME NULL DEFAULT NULL,
     ADD INDEX idx_messages_conversation_read (conversation_id, read_at);
+
+
+
+
+
+ALTER TABLE conversations
+    ADD COLUMN public_id CHAR(36) NULL AFTER id;
+
+
+UPDATE conversations
+SET public_id = UUID()
+WHERE public_id IS NULL OR public_id = '';
+
+
+
+ALTER TABLE conversations
+    MODIFY COLUMN public_id CHAR(36) NOT NULL,
+    ADD UNIQUE KEY uq_conversations_public_id (public_id);
+
+

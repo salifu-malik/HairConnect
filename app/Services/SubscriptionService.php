@@ -1,12 +1,16 @@
 <?php
 
 namespace App\Services;
+use App\Exceptions\PaystackInitializationException;
 
 use App\Repositories\PlanRepository;
 use App\Repositories\PlanVersionRepository;
 use App\Repositories\SubscriptionRepository;
 use App\Repositories\SubscriptionPaymentRepository;
+use App\Repositories\SubscriptionPaymentAttemptRepository;
 use App\Repositories\UserRepository;
+use App\Repositories\BarberRepository;
+use App\Repositories\ShopRepository;
 use App\Repositories\SubscriptionEventRepository;
 use Exception;
 
@@ -16,7 +20,10 @@ class SubscriptionService
     private PlanVersionRepository $planVersionRepository;
     private SubscriptionRepository $subscriptionRepository;
     private SubscriptionPaymentRepository $paymentRepository;
+    private SubscriptionPaymentAttemptRepository $attemptRepository;
     private UserRepository $userRepository;
+    private BarberRepository $barberRepository;
+    private ShopRepository $shopRepository;
     private SubscriptionEventRepository $eventRepository;
     private PaystackService $paystackService;
     public function __construct(
@@ -25,15 +32,21 @@ class SubscriptionService
         SubscriptionRepository $subscriptionRepository,
         SubscriptionPaymentRepository $paymentRepository,
         UserRepository $userRepository,
+        BarberRepository $barberRepository,
+        ShopRepository $shopRepository,
         SubscriptionEventRepository $eventRepository,
-         PaystackService $paystackService
+        SubscriptionPaymentAttemptRepository $attemptRepository,
+        PaystackService $paystackService
     ) {
         $this->planRepository = $planRepository;
         $this->planVersionRepository = $planVersionRepository;
         $this->subscriptionRepository = $subscriptionRepository;
         $this->paymentRepository = $paymentRepository;
         $this->userRepository = $userRepository;
+        $this->barberRepository = $barberRepository;
+        $this->shopRepository = $shopRepository;
         $this->eventRepository = $eventRepository;
+        $this->attemptRepository = $attemptRepository;
         $this->paystackService = $paystackService;
     }
 
@@ -381,28 +394,63 @@ class SubscriptionService
     public function createSubscription(
         int $userId,
         int $planId,
-        string $billingPeriod
+        string $billingPeriod,
+        ?int $shopId = null
     ): array {
         // Get the selected plan.
         $plan = $this->planRepository->findById($planId);
 
         if (!$plan) {
-            throw new Exception(
-                'Subscription plan not found.'
-            );
+            throw new Exception('Subscription plan not found.');
         }
 
-        // Make sure the user has the role required
-        // by the selected subscription plan.
+        // Validate the authenticated user's role.
         $this->validateSubscriberRole(
             $userId,
             $plan->role
         );
 
-        // Get the currently approved pricing version.
-        $pricing = $this->getApprovedPricing(
-            $planId
+        // Resolve the beneficiary using server-side records.
+        $beneficiary = $this->resolveSubscriptionBeneficiary(
+            $userId,
+            $plan,
+            $shopId
         );
+
+        $beneficiaryType = $beneficiary['beneficiary_type'];
+        $beneficiaryId = $beneficiary['beneficiary_id'];
+        $scope = $beneficiary['scope'];
+
+        // Prevent duplicate pending entitlements for this beneficiary.
+        $existingPending = $this->subscriptionRepository
+            ->findPendingByBeneficiary(
+                $beneficiaryType,
+                $beneficiaryId,
+                $scope
+            );
+
+        if ($existingPending !== null) {
+            throw new Exception(
+                'A pending subscription already exists for this entitlement.'
+            );
+        }
+
+        // Prevent creating another active entitlement.
+        $existingActive = $this->subscriptionRepository
+            ->findActiveByBeneficiary(
+                $beneficiaryType,
+                $beneficiaryId,
+                $scope
+            );
+
+        if ($existingActive !== null) {
+            throw new Exception(
+                'An active subscription already exists for this entitlement.'
+            );
+        }
+
+        // Get the currently approved pricing version.
+        $pricing = $this->getApprovedPricing($planId);
 
         // Calculate the authoritative subscription amount.
         $amount = $this->calculateSubscriptionAmount(
@@ -410,37 +458,11 @@ class SubscriptionService
             $billingPeriod
         );
 
-        // Prevent another pending subscription
-        // for the same user.
-        $existingPending =
-            $this->subscriptionRepository
-                ->findPendingByUserId($userId);
-
-        if ($existingPending !== null) {
-            throw new Exception(
-                'You already have a pending subscription.'
-            );
-        }
-
-        // Prevent subscribing while an active
-        // subscription already exists.
-        $existingActive =
-            $this->subscriptionRepository
-                ->findActiveByUserId($userId);
-
-        if ($existingActive !== null) {
-            throw new Exception(
-                'You already have an active subscription.'
-            );
-        }
-
-        // Get the authenticated user's email.
+        // Get the authenticated payer's email.
         $user = $this->userRepository->findById($userId);
 
         if (!$user) {
-            throw new Exception(
-                'User not found.'
-            );
+            throw new Exception('User not found.');
         }
 
         if (empty($user->email)) {
@@ -449,23 +471,84 @@ class SubscriptionService
             );
         }
 
-        /*
-         * Generate the payment reference on the backend.
-         * The frontend must never generate the authoritative
-         * Paystack reference.
-         */
-        $reference =
-            $this->paystackService
-                ->generateReference();
+        // Create the pending VALID entitlement first.
+        $subscription = $this->subscriptionRepository
+            ->createEntitlement(
+                $userId,
+                $planId,
+                $pricing->id,
+                $billingPeriod,
+                $scope,
+                $beneficiaryType,
+                $beneficiaryId
+            );
 
-        /*
-         * Initialize the Paystack transaction first.
-         *
-         * The amount comes from the approved pricing version,
-         * not from the frontend.
-         */
-        $paystackTransaction =
-            $this->paystackService
+        if ($subscription === null) {
+            throw new Exception(
+                'Unable to create subscription entitlement.'
+            );
+        }
+
+
+        // Create the local pending payment before contacting Paystack.
+        try {
+            $paystackInitializationStarted = false;
+            $paystackInitializationSucceeded = false;
+
+            // Generate the payment reference on the backend.
+            $reference = $this->paystackService->generateReference();
+
+            $payment = $this->paymentRepository->create(
+                $subscription->id,
+                $amount,
+                'GHS',
+                $reference
+            );
+
+            if ($payment === null) {
+                throw new Exception(
+                    'Unable to create subscription payment record.'
+                );
+            }
+
+            // Create the first Paystack attempt before initialization.
+            $attempt = $this->attemptRepository->create(
+                $payment->id,
+                1,
+                $reference
+            );
+
+            if ($attempt === null) {
+                throw new Exception(
+                    'Unable to create subscription payment attempt.'
+                );
+            }
+
+
+            // Record subscription creation.
+            $eventCreated = $this->eventRepository->create(
+                $subscription->id,
+                $pricing->id,
+                $userId,
+                'SUBSCRIPTION_CREATED',
+                'Pending ' . $billingPeriod .
+                ' subscription created for plan ID ' . $planId .
+                ', scope ' . $scope .
+                ', beneficiary ' . $beneficiaryType .
+                ' #' . $beneficiaryId . '.',
+                $userId
+            );
+
+            if (!$eventCreated) {
+                throw new Exception(
+                    'Unable to record subscription creation event.'
+                );
+            }
+
+            $paystackInitializationStarted = true;
+
+            // Initialize the Paystack transaction.
+            $paystackTransaction = $this->paystackService
                 ->initializeTransaction(
                     $user->email,
                     $amount,
@@ -473,127 +556,240 @@ class SubscriptionService
                     [
                         'type' => 'subscription',
                         'user_id' => $userId,
+                        'subscription_id' => $subscription->id,
                         'plan_id' => $planId,
                         'plan_version_id' => $pricing->id,
-                        'billing_period' => $billingPeriod
+                        'billing_period' => $billingPeriod,
+                        'scope' => $scope,
+                        'beneficiary_type' => $beneficiaryType,
+                        'beneficiary_id' => $beneficiaryId,
                     ]
                 );
 
-        if (
-            empty($paystackTransaction['reference'])
-        ) {
-            throw new Exception(
-                'Paystack did not return a transaction reference.'
-            );
+            $paystackInitializationSucceeded = true;
+
+            // Paystack must return the reference we generated.
+            if (
+                empty($paystackTransaction['reference']) ||
+                $paystackTransaction['reference'] !== $reference
+            ) {
+                throw new Exception(
+                    'Paystack returned an invalid transaction reference.'
+                );
+            }
+
+            if (empty($paystackTransaction['authorization_url'])) {
+                throw new Exception(
+                    'Paystack did not return a payment authorization URL.'
+                );
+            }
+
+            $authorizationUrl =
+                $paystackTransaction['authorization_url'];
+
+            $accessCode =
+                $paystackTransaction['access_code'] ?? null;
+
+            $checkoutSaved = $this->attemptRepository
+                ->updateCheckoutDetails(
+                    $attempt->id,
+                    $authorizationUrl,
+                    $accessCode
+                );
+
+            if (!$checkoutSaved) {
+                throw new Exception(
+                    'Unable to persist Paystack checkout details.'
+                );
+            }
+
+            return [
+                'subscription' => $subscription,
+                'payment' => $payment,
+                'amount' => $amount,
+                'currency' => 'GHS',
+                'billing_period' => $billingPeriod,
+                'plan_version_id' => $pricing->id,
+                'reference' => $reference,
+                'authorization_url' => $authorizationUrl,
+                'access_code' => $accessCode
+            ];
+
+        } catch (\Throwable $exception) {
+
+            /*
+             * Determine whether Paystack may have created
+             * the transaction.
+             */
+            $initializationOutcomeUnknown =
+                $paystackInitializationSucceeded ||
+                (
+                    $paystackInitializationStarted &&
+                    (
+                        !($exception instanceof PaystackInitializationException) ||
+                        $exception->outcomeUnknown
+                    )
+                );
+
+            if ($initializationOutcomeUnknown) {
+
+                /*
+                 * Paystack may have created the transaction.
+                 *
+                 * Preserve the pending payment and subscription.
+                 * Do not automatically create another attempt.
+                 */
+                if (isset($attempt) && $attempt !== null) {
+                    try {
+                        $attemptUpdated = $this->attemptRepository
+                            ->updateStatus(
+                                $attempt->id,
+                                'initialization_unknown',
+                                $exception->getMessage()
+                            );
+
+                        if (!$attemptUpdated) {
+                            error_log(
+                                'Unable to mark payment attempt #' .
+                                $attempt->id .
+                                ' as initialization_unknown.'
+                            );
+                        }
+                    } catch (\Throwable $e) {
+                        error_log(
+                            'Unknown initialization state update failed for attempt #' .
+                            $attempt->id . ': ' . $e->getMessage()
+                        );
+                    }
+                }
+
+                error_log(
+                    'Paystack initialization outcome requires investigation. ' .
+                    'Payment reference: ' .
+                    ($reference ?? 'unavailable') .
+                    '. Reason: ' . $exception->getMessage()
+                );
+
+            } else {
+
+                /*
+                 * Definitive failure or failure before the
+                 * Paystack request was sent.
+                 */
+
+                // 1. Mark the attempt as failed.
+                if (isset($attempt) && $attempt !== null) {
+                    try {
+                        $attemptUpdated = $this->attemptRepository
+                            ->updateStatus(
+                                $attempt->id,
+                                'failed',
+                                $exception->getMessage()
+                            );
+
+                        if (!$attemptUpdated) {
+                            error_log(
+                                'Unable to mark payment attempt #' .
+                                $attempt->id . ' as failed.'
+                            );
+                        }
+                    } catch (\Throwable $e) {
+                        error_log(
+                            'Attempt failure update failed for attempt #' .
+                            $attempt->id . ': ' . $e->getMessage()
+                        );
+                    }
+                }
+
+                // 2. Mark the parent payment as failed.
+                if (isset($payment) && $payment !== null) {
+                    try {
+                        $this->paymentRepository->updateStatus(
+                            $payment->id,
+                            'failed'
+                        );
+                    } catch (\Throwable $e) {
+                        error_log(
+                            'Payment failure update failed for payment #' .
+                            $payment->id . ': ' . $e->getMessage()
+                        );
+                    }
+                }
+
+                // 3. Cancel the subscription.
+                try {
+                    $this->subscriptionRepository->updateStatus(
+                        $subscription->id,
+                        'cancelled'
+                    );
+                } catch (\Throwable $e) {
+                    error_log(
+                        'Subscription cancellation failed for subscription #' .
+                        $subscription->id . ': ' . $e->getMessage()
+                    );
+                }
+
+                // 4. Record the cancellation event.
+                try {
+                    $eventCreated = $this->eventRepository->create(
+                        $subscription->id,
+                        $pricing->id,
+                        $userId,
+                        'SUBSCRIPTION_CANCELLED',
+                        'Subscription cancelled because payment initialization failed: ' .
+                        $exception->getMessage(),
+                        $userId
+                    );
+
+                    if (!$eventCreated) {
+                        error_log(
+                            'Unable to record cancellation event for subscription #' .
+                            $subscription->id
+                        );
+                    }
+                } catch (\Throwable $e) {
+                    error_log(
+                        'Cancellation event creation failed for subscription #' .
+                        $subscription->id . ': ' . $e->getMessage()
+                    );
+                }
+            }
+
+            // Preserve the original exception.
+            throw $exception;
         }
-
-        /*
-         * Use the reference returned by Paystack.
-         */
-        $reference =
-            $paystackTransaction['reference'];
-
-        $startDate = date('Y-m-d H:i:s');
-
-        if ($billingPeriod === 'monthly') {
-            $endDate = date(
-                'Y-m-d H:i:s',
-                strtotime('+1 month')
-            );
-        } else {
-            $endDate = date(
-                'Y-m-d H:i:s',
-                strtotime('+1 year')
-            );
-        }
-
-        // Create the subscription as pending.
-        $subscription =
-            $this->subscriptionRepository->create(
-                $userId,
-                $planId,
-                $pricing->id,
-                $startDate,
-                $endDate
-            );
-
-        if ($subscription === null) {
-            throw new Exception(
-                'Unable to create subscription.'
-            );
-        }
-
-        /*
-         * Create the corresponding pending payment.
-         */
-        $payment =
-            $this->paymentRepository->create(
-                $subscription->id,
-                $amount,
-                'GHS',
-                $reference
-            );
-
-        if ($payment === null) {
-            throw new Exception(
-                'Subscription was created, but the payment record could not be created.'
-            );
-        }
-
-        // Record the subscription creation event.
-        $eventCreated =
-            $this->eventRepository->create(
-                $subscription->id,
-                $pricing->id,
-                $userId,
-                'SUBSCRIPTION_CREATED',
-                'Pending ' .
-                $billingPeriod .
-                ' subscription created for plan ID ' .
-                $planId .
-                '.',
-                $userId
-            );
-
-        if (!$eventCreated) {
-            throw new Exception(
-                'Subscription was created, but the audit event could not be recorded.'
-            );
-        }
-
-        return [
-            'subscription' => $subscription,
-            'payment' => $payment,
-            'amount' => $amount,
-            'currency' => 'GHS',
-            'billing_period' => $billingPeriod,
-            'plan_version_id' => $pricing->id,
-            'reference' => $reference,
-            'authorization_url' =>
-                $paystackTransaction['authorization_url']
-                ?? null,
-            'access_code' =>
-                $paystackTransaction['access_code']
-                ?? null
-        ];
     }
 
 
-
-
     /**
-     * Verify a subscription payment with Paystack
-     * and activate the subscription only after successful
-     * server-side verification.
+     * Verify a subscription payment with Paystack.
+     *
+     * Each Paystack reference belongs to a payment attempt.
+     * Payment completion, attempt verification, subscription
+     * activation and audit logging are handled transactionally.
      */
     public function verifySubscriptionPayment(
         string $reference,
         int $userId
     ): array {
-        // Find the HairConnect payment using the reference.
-        $payment =
-            $this->paymentRepository
-                ->findByReference($reference);
+
+        /*
+         * STEP 1: Find the payment attempt.
+         */
+        $attempt = $this->attemptRepository
+            ->findByReference($reference);
+
+        if ($attempt === null) {
+            throw new Exception(
+                'Subscription payment attempt not found.'
+            );
+        }
+
+        /*
+         * STEP 2: Resolve the parent payment.
+         */
+        $payment = $this->paymentRepository
+            ->findById($attempt->paymentId);
 
         if ($payment === null) {
             throw new Exception(
@@ -601,13 +797,11 @@ class SubscriptionService
             );
         }
 
-        // Make sure the payment belongs to the
-        // authenticated user.
-        $subscription =
-            $this->subscriptionRepository
-                ->findById(
-                    $payment->subscriptionId
-                );
+        /*
+         * STEP 3: Resolve the subscription and verify ownership.
+         */
+        $subscription = $this->subscriptionRepository
+            ->findById($payment->subscriptionId);
 
         if ($subscription === null) {
             throw new Exception(
@@ -621,54 +815,36 @@ class SubscriptionService
             );
         }
 
-        // Do not process an already completed payment.
-        if ($payment->status === 'completed') {
-            throw new Exception(
-                'This payment has already been completed.'
-            );
-        }
-
-        // The subscription must still be pending.
-        if ($subscription->status !== 'pending') {
-            throw new Exception(
-                'This subscription is no longer pending.'
-            );
-        }
-
         /*
-         * Ask Paystack to verify the transaction.
+         * STEP 4: Verify directly with Paystack.
          *
-         * This is server-to-server verification.
+         * Network requests must happen outside the database
+         * transaction to avoid holding database locks.
          */
-        $transaction =
-            $this->paystackService
-                ->verifyTransaction($reference);
+        $transaction = $this->paystackService
+            ->verifyTransaction($reference);
 
-        // Verify the reference returned by Paystack.
         if (
-            ($transaction['reference'] ?? '')
-            !== $payment->reference
+            ($transaction['reference'] ?? '') !== $reference
         ) {
             throw new Exception(
                 'Paystack transaction reference does not match the payment.'
             );
         }
 
-        // Paystack must report a successful transaction.
         if (
-            ($transaction['status'] ?? '')
-            !== 'success'
+            ($transaction['status'] ?? '') !== 'success'
         ) {
             throw new Exception(
                 'Payment was not successful.'
             );
         }
 
-        // Verify the currency.
+        /*
+         * STEP 5: Validate the initial payment details.
+         */
         if (
-            strtoupper(
-                $transaction['currency'] ?? ''
-            )
+            strtoupper($transaction['currency'] ?? '')
             !== strtoupper($payment->currency)
         ) {
             throw new Exception(
@@ -676,22 +852,13 @@ class SubscriptionService
             );
         }
 
-        /*
-         * Paystack returns the amount in the smallest
-         * currency unit.
-         *
-         * HairConnect stores GHS amounts as normal
-         * decimal amounts.
-         */
-        $expectedAmount =
-            (int) round(
-                $payment->amount * 100
-            );
+        $paidAmount = (int) (
+            $transaction['amount'] ?? 0
+        );
 
-        $paidAmount =
-            (int) (
-                $transaction['amount'] ?? 0
-            );
+        $expectedAmount = (int) round(
+            $payment->amount * 100
+        );
 
         if ($paidAmount !== $expectedAmount) {
             throw new Exception(
@@ -700,80 +867,582 @@ class SubscriptionService
         }
 
         /*
-         * Everything has passed verification.
-         *
-         * Mark the payment as completed first.
+         * STEP 6: Begin the database transaction.
          */
-        $paymentUpdated =
-            $this->paymentRepository
-                ->updateStatus(
-                    $payment->id,
-                    'completed'
+        $db = \App\Helpers\DatabaseManager::getConnection(
+            'subscription_db'
+        );
+
+        $resultStatus = 'success';
+
+        try {
+
+            $db->beginTransaction();
+
+            /*
+             * LOCK ORDER:
+             *
+             * 1. Parent payment
+             * 2. Payment attempt
+             * 3. Subscription
+             *
+             * Every verification process must follow this order.
+             */
+
+            $lockedPayment = $this->paymentRepository
+                ->findByIdForUpdate($payment->id);
+
+            if ($lockedPayment === null) {
+                throw new Exception(
+                    'Subscription payment could not be found.'
+                );
+            }
+
+            $lockedAttempt = $this->attemptRepository
+                ->findByReferenceForUpdate($reference);
+
+            if ($lockedAttempt === null) {
+                throw new Exception(
+                    'Subscription payment attempt could not be found.'
+                );
+            }
+
+            if (
+                $lockedAttempt->paymentId !== $lockedPayment->id
+            ) {
+                throw new Exception(
+                    'Payment attempt does not belong to the expected payment.'
+                );
+            }
+
+            $lockedSubscription = $this->subscriptionRepository
+                ->findByIdForUpdate(
+                    $lockedPayment->subscriptionId
                 );
 
-        if (!$paymentUpdated) {
-            throw new Exception(
-                'Unable to update subscription payment status.'
-            );
-        }
-
-        /*
-         * Activate the subscription.
-         */
-        $subscriptionUpdated =
-            $this->subscriptionRepository
-                ->updateStatus(
-                    $subscription->id,
-                    'active'
+            if ($lockedSubscription === null) {
+                throw new Exception(
+                    'Subscription associated with this payment was not found.'
                 );
+            }
 
-        if (!$subscriptionUpdated) {
-            throw new Exception(
-                'Payment was completed, but the subscription could not be activated.'
+            /*
+             * STEP 7: Revalidate ownership and payment details
+             * after acquiring database locks.
+             */
+            if ($lockedSubscription->userId !== $userId) {
+                throw new Exception(
+                    'You are not authorized to verify this payment.'
+                );
+            }
+
+            if (
+                strtoupper($transaction['currency'] ?? '')
+                !== strtoupper($lockedPayment->currency)
+            ) {
+                throw new Exception(
+                    'Payment currency does not match the subscription payment.'
+                );
+            }
+
+            $lockedExpectedAmount = (int) round(
+                $lockedPayment->amount * 100
             );
-        }
 
-        /*
-         * Record the subscription renewal/activation
-         * event in the audit trail.
-         */
-        $eventCreated =
-            $this->eventRepository->create(
-                $subscription->id,
-                $subscription->planVersionId,
-                $userId,
-                'SUBSCRIPTION_RENEWED',
-                'Subscription payment verified successfully and subscription activated.',
+            if ($paidAmount !== $lockedExpectedAmount) {
+                throw new Exception(
+                    'Payment amount does not match the subscription amount.'
+                );
+            }
+
+            /*
+             * STEP 8: Define the attempt-success transition.
+             *
+             * An already-succeeded attempt is idempotent.
+             */
+            $markAttemptSucceeded = function () use (
+                $lockedAttempt
+            ): void {
+
+                if ($lockedAttempt->status === 'succeeded') {
+                    return;
+                }
+
+                $updated = $this->attemptRepository
+                    ->updateStatus(
+                        $lockedAttempt->id,
+                        'succeeded'
+                    );
+
+                if (!$updated) {
+                    throw new Exception(
+                        'Unable to mark subscription payment attempt as successful.'
+                    );
+                }
+            };
+
+            /*
+             * STEP 9: Define reconciliation handling.
+             *
+             * Repeated callbacks must not create duplicate events.
+             *
+             * pending_review can be escalated to refund_required.
+             * refund_required, refunded and resolved must not
+             * be downgraded by another callback.
+             */
+            $recordReconciliation = function (
+                string $targetStatus,
+                string $description
+            ) use (
+                $lockedAttempt,
+                $lockedSubscription,
                 $userId
-            );
+            ): void {
 
-        if (!$eventCreated) {
-            throw new Exception(
-                'Subscription was activated, but the audit event could not be recorded.'
-            );
+                $currentStatus =
+                    $lockedAttempt->reconciliationStatus;
+
+                if (
+                    in_array(
+                        $currentStatus,
+                        ['refunded', 'resolved'],
+                        true
+                    )
+                ) {
+                    return;
+                }
+
+                if ($currentStatus === $targetStatus) {
+                    return;
+                }
+
+                if (
+                    $currentStatus === 'refund_required'
+                    && $targetStatus !== 'refund_required'
+                ) {
+                    return;
+                }
+
+                if (
+                    $currentStatus === 'pending_review'
+                    && $targetStatus === 'pending_review'
+                ) {
+                    return;
+                }
+
+                $updated = $this->attemptRepository
+                    ->updateReconciliationStatus(
+                        $lockedAttempt->id,
+                        $targetStatus
+                    );
+
+                if (!$updated) {
+                    throw new Exception(
+                        'Unable to update payment reconciliation status.'
+                    );
+                }
+
+                $eventCreated = $this->eventRepository->create(
+                    $lockedSubscription->id,
+                    $lockedSubscription->planVersionId,
+                    $userId,
+                    'SUBSCRIPTION_PAYMENT_RECONCILIATION_REQUIRED',
+                    $description,
+                    $userId
+                );
+
+                if (!$eventCreated) {
+                    throw new Exception(
+                        'Unable to record payment reconciliation event.'
+                    );
+                }
+            };
+
+            /*
+             * STEP 10: Handle an already-completed parent payment.
+             */
+            if ($lockedPayment->status === 'completed') {
+
+                /*
+                 * Payment completed and subscription active.
+                 */
+                if ($lockedSubscription->status === 'active') {
+
+                    /*
+                     * The activation marker identifies the exact attempt
+                     * that originally activated this subscription.
+                     */
+                    if (
+                        $lockedPayment->activatedAttemptId === $lockedAttempt->id
+                    ) {
+
+                        /*
+                         * Same attempt, already successfully processed.
+                         */
+                        if (
+                            $lockedAttempt->status === 'succeeded'
+                            && $lockedAttempt->reconciliationStatus === 'not_required'
+                        ) {
+                            $resultStatus = 'success';
+
+                        } else {
+
+                            /*
+                             * The activation marker and attempt state disagree.
+                             * Do not assume this is a duplicate charge.
+                             */
+                            $recordReconciliation(
+                                'pending_review',
+                                sprintf(
+                                    'Payment attempt #%d (%s) is recorded as the activating attempt, but its status or reconciliation state is inconsistent. Manual review is required.',
+                                    $lockedAttempt->attemptNumber,
+                                    $reference
+                                )
+                            );
+
+                            $resultStatus = 'reconciliation_required';
+                        }
+
+                    } elseif ($lockedPayment->activatedAttemptId !== null) {
+
+                        /*
+                         * Another attempt is recorded as the activating attempt.
+                         * This successful attempt requires refund review.
+                         */
+                        $markAttemptSucceeded();
+
+                        $recordReconciliation(
+                            'refund_required',
+                            sprintf(
+                                'Successful payment attempt #%d (%s) requires refund review because a different attempt already activated the subscription.',
+                                $lockedAttempt->attemptNumber,
+                                $reference
+                            )
+                        );
+
+                        $resultStatus = 'reconciliation_required';
+
+                    } else {
+
+                        /*
+                         * No activation marker exists.
+                         * We cannot reliably establish which attempt activated
+                         * the subscription, so require manual investigation.
+                         */
+                        $markAttemptSucceeded();
+
+                        $recordReconciliation(
+                            'pending_review',
+                            sprintf(
+                                'Successful payment attempt #%d (%s) requires manual reconciliation because the parent payment is completed and the subscription is active, but no activating attempt is recorded.',
+                                $lockedAttempt->attemptNumber,
+                                $reference
+                            )
+                        );
+
+                        $resultStatus = 'reconciliation_required';
+                    }                } else {
+
+                    /*
+                     * A completed payment with a pending subscription
+                     * is inconsistent. Do not activate automatically.
+                     */
+                    $markAttemptSucceeded();
+                    $recordReconciliation(
+                        'pending_review',
+                        sprintf(
+                            'Payment attempt #%d (%s) requires manual reconciliation because the parent payment is completed while the subscription remains pending.',
+                            $lockedAttempt->attemptNumber,
+                            $reference
+                        )
+                    );
+
+                    $resultStatus = 'reconciliation_required';
+                }
+
+
+            } elseif ($lockedPayment->status === 'pending') {
+
+                /*
+                 * STEP 11: Handle pending parent payments.
+                 */
+
+                if ($lockedSubscription->status === 'pending') {
+
+                    /*
+                     * An attempt already marked succeeded while
+                     * its parent payment and subscription remain
+                     * pending represents an inconsistent state.
+                     *
+                     * Do not silently activate it.
+                     */
+                    if (
+                        $lockedAttempt->status === 'succeeded'
+                        || $lockedAttempt->reconciliationStatus !== 'not_required'
+                    ) {
+
+                        $markAttemptSucceeded();
+
+                        $recordReconciliation(
+                            'pending_review',
+                            sprintf(
+                                'Successful payment attempt #%d (%s) requires manual reconciliation because the attempt and parent payment states are inconsistent.',
+                                $lockedAttempt->attemptNumber,
+                                $reference
+                            )
+                        );
+
+                        $resultStatus = 'reconciliation_required';
+
+                    } else {
+
+                        /*
+                         * Normal successful payment.
+                         */
+                        $markAttemptSucceeded();
+                        $paymentUpdated = $this->paymentRepository
+                            ->completeWithActivatedAttempt(
+                                $lockedPayment->id,
+                                $lockedAttempt->id
+                            );
+
+                        if (!$paymentUpdated) {
+                            throw new Exception(
+                                'Unable to complete subscription payment '
+                                . 'and record its activation attempt.'
+                            );
+                        }
+
+                        /*
+                         * STEP 12: Calculate subscription dates.
+                         */
+                        $billingPeriod =
+                            $lockedSubscription->billingPeriod;
+
+                        if (
+                            !in_array(
+                                $billingPeriod,
+                                ['monthly', 'yearly'],
+                                true
+                            )
+                        ) {
+                            throw new Exception(
+                                'Subscription has an invalid billing period.'
+                            );
+                        }
+
+                        $startDate = new \DateTimeImmutable(
+                            'now',
+                            new \DateTimeZone('UTC')
+                        );
+
+                        if ($billingPeriod === 'monthly') {
+
+                            $endDate = $startDate
+                                ->modify('first day of next month')
+                                ->modify(
+                                    '+' . (
+                                        $startDate->format('j') - 1
+                                    ) . ' days'
+                                );
+
+                            $nextMonth = $startDate
+                                ->modify('first day of next month');
+
+                            $daysInNextMonth = (int)
+                            $nextMonth->format('t');
+
+                            if (
+                                (int) $startDate->format('j')
+                                > $daysInNextMonth
+                            ) {
+                                $endDate = $nextMonth
+                                    ->modify('last day of this month');
+                            }
+
+                        } else {
+
+                            $endDate = $startDate->modify('+1 year');
+                        }
+
+                        $formattedStartDate =
+                            $startDate->format('Y-m-d H:i:s');
+
+                        $formattedEndDate =
+                            $endDate->format('Y-m-d H:i:s');
+
+                        /*
+                         * STEP 13: Activate subscription.
+                         */
+                        $subscriptionUpdated =
+                            $this->subscriptionRepository
+                                ->activate(
+                                    $lockedSubscription->id,
+                                    $formattedStartDate,
+                                    $formattedEndDate
+                                );
+
+                        if (!$subscriptionUpdated) {
+                            throw new Exception(
+                                'Unable to activate subscription.'
+                            );
+                        }
+
+                        /*
+                         * STEP 14: Record activation event.
+                         */
+                        $eventCreated =
+                            $this->eventRepository->create(
+                                $lockedSubscription->id,
+                                $lockedSubscription->planVersionId,
+                                $userId,
+                                'SUBSCRIPTION_ACTIVATED',
+                                'Subscription payment verified successfully and subscription activated.',
+                                $userId
+                            );
+
+                        if (!$eventCreated) {
+                            throw new Exception(
+                                'Unable to record subscription activation event.'
+                            );
+                        }
+                    }
+
+                }
+                elseif ($lockedSubscription->status === 'active') {
+
+                    /*
+                     * The subscription is already active.
+                     *
+                     * Record the successful charge but do not
+                     * activate the subscription again.
+                     */
+                    $markAttemptSucceeded();
+
+                    $paymentUpdated = $this->paymentRepository
+                        ->updateStatus(
+                            $lockedPayment->id,
+                            'completed'
+                        );
+
+                    if (!$paymentUpdated) {
+                        throw new Exception(
+                            'Unable to update subscription payment status.'
+                        );
+                    }
+
+                    $recordReconciliation(
+                        'refund_required',
+                        sprintf(
+                            'Successful payment attempt #%d (%s) requires refund review because the subscription was already active.',
+                            $lockedAttempt->attemptNumber,
+                            $reference
+                        )
+                    );
+
+                    $resultStatus = 'reconciliation_required';
+
+                } else {
+
+                    /*
+                     * Successful payment, but subscription is no
+                     * longer eligible for automatic activation.
+                     */
+                    $markAttemptSucceeded();
+
+                    $paymentUpdated = $this->paymentRepository
+                        ->updateStatus(
+                            $lockedPayment->id,
+                            'completed'
+                        );
+
+                    if (!$paymentUpdated) {
+                        throw new Exception(
+                            'Unable to update subscription payment status.'
+                        );
+                    }
+
+                    $recordReconciliation(
+                        'pending_review',
+                        sprintf(
+                            'Successful payment attempt #%d (%s) requires manual reconciliation because the subscription status is %s.',
+                            $lockedAttempt->attemptNumber,
+                            $reference,
+                            $lockedSubscription->status
+                        )
+                    );
+
+                    $resultStatus = 'reconciliation_required';
+                }
+
+            } else {
+
+                /*
+                 * STEP 15: Parent payment is no longer pending
+                 * or completed.
+                 *
+                 * Paystack reports a successful charge, but the
+                 * parent payment cannot safely be completed here.
+                 */
+                $markAttemptSucceeded();
+
+                $recordReconciliation(
+                    'pending_review',
+                    sprintf(
+                        'Successful payment attempt #%d (%s) requires manual reconciliation because the parent payment status is %s.',
+                        $lockedAttempt->attemptNumber,
+                        $reference,
+                        $lockedPayment->status
+                    )
+                );
+
+                $resultStatus = 'reconciliation_required';
+            }
+
+            /*
+             * STEP 16: Commit all changes.
+             */
+            $db->commit();
+
+        } catch (\Throwable $exception) {
+
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+
+            throw $exception;
         }
 
-        // Reload the updated records.
-        $updatedPayment =
-            $this->paymentRepository
-                ->findById($payment->id);
+        /*
+         * STEP 17: Reload committed records.
+         */
+        $updatedPayment = $this->paymentRepository
+            ->findById($payment->id);
 
-        $updatedSubscription =
-            $this->subscriptionRepository
-                ->findById($subscription->id);
+        $updatedSubscription = $this->subscriptionRepository
+            ->findById($payment->subscriptionId);
+
+        $updatedAttempt = $this->attemptRepository
+            ->findByReference($reference);
+
+        if (
+            $updatedPayment === null
+            || $updatedSubscription === null
+            || $updatedAttempt === null
+        ) {
+            throw new Exception(
+                'Payment was processed, but updated records could not be retrieved.'
+            );
+        }
 
         return [
-            'subscription' =>
-                $updatedSubscription,
-
-            'payment' =>
-                $updatedPayment,
-
-            'reference' =>
-                $reference,
-
-            'status' =>
-                'success'
+            'subscription' => $updatedSubscription,
+            'payment' => $updatedPayment,
+            'attempt' => $updatedAttempt,
+            'reference' => $reference,
+            'status' => $resultStatus,
+            'reconciliation_status' =>
+                $updatedAttempt->reconciliationStatus
         ];
     }
 
@@ -781,31 +1450,23 @@ class SubscriptionService
     /**
      * Resume payment for an existing pending subscription.
      *
-     * This does not create a new subscription or payment.
-     * It creates a new Paystack transaction reference for
-     * the existing pending payment.
+     * Each Paystack checkout receives its own durable payment attempt.
+     * The parent subscription payment reference is never overwritten.
      */
     public function resumePendingSubscriptionPayment(
         int $userId
     ): array {
 
         /*
-         * Find the user's pending subscription.
+         * STEP 1: Find the candidate pending subscription.
          */
-        $subscription =
-            $this->subscriptionRepository
-                ->findPendingByUserId($userId);
+        $subscription = $this->subscriptionRepository
+            ->findPendingByUserId($userId);
 
         if ($subscription === null) {
-            throw new Exception(
-                'No pending subscription found.'
-            );
+            throw new Exception('No pending subscription found.');
         }
 
-        /*
-         * Make sure the subscription belongs to
-         * the authenticated user.
-         */
         if ($subscription->userId !== $userId) {
             throw new Exception(
                 'You are not authorized to resume this payment.'
@@ -813,31 +1474,16 @@ class SubscriptionService
         }
 
         /*
-         * Find payments associated with this subscription.
-         *
-         * The repository returns the newest payment first.
+         * STEP 2: Find its pending parent payment.
          */
-        $payments =
-            $this->paymentRepository
-                ->findBySubscriptionId(
-                    $subscription->id
-                );
+        $payments = $this->paymentRepository
+            ->findBySubscriptionId($subscription->id);
 
-        if (empty($payments)) {
-            throw new Exception(
-                'No payment was found for this subscription.'
-            );
-        }
-
-        /*
-         * Find the pending payment.
-         */
         $payment = null;
 
-        foreach ($payments as $candidatePayment) {
-
-            if ($candidatePayment->status === 'pending') {
-                $payment = $candidatePayment;
+        foreach ($payments as $candidate) {
+            if ($candidate->status === 'pending') {
+                $payment = $candidate;
                 break;
             }
         }
@@ -849,16 +1495,12 @@ class SubscriptionService
         }
 
         /*
-         * Get the authenticated user's account.
+         * STEP 3: Validate the authenticated user's account.
          */
-        $user =
-            $this->userRepository
-                ->findById($userId);
+        $user = $this->userRepository->findById($userId);
 
         if ($user === null) {
-            throw new Exception(
-                'User account not found.'
-            );
+            throw new Exception('User account not found.');
         }
 
         if (empty($user->email)) {
@@ -868,93 +1510,302 @@ class SubscriptionService
         }
 
         /*
-         * Generate a NEW Paystack transaction reference.
+         * STEP 4: Lock and validate the payment and subscription.
          *
-         * The previous reference has already been registered
-         * with Paystack, so it cannot be initialized again.
+         * Lock order:
+         * 1. Parent payment.
+         * 2. Subscription.
+         *
+         * All attempt creation decisions happen while holding
+         * the parent payment lock.
          */
-        $newReference =
-            $this->paystackService
+        $db = \App\Helpers\DatabaseManager::getConnection(
+            'subscription_db'
+        );
+
+        $attempt = null;
+        $existingAttempt = null;
+
+        try {
+            $db->beginTransaction();
+
+            $lockedPayment = $this->paymentRepository
+                ->findByIdForUpdate($payment->id);
+
+            if ($lockedPayment === null) {
+                throw new Exception(
+                    'Subscription payment could not be found.'
+                );
+            }
+
+            $lockedSubscription = $this->subscriptionRepository
+                ->findByIdForUpdate($lockedPayment->subscriptionId);
+
+            if ($lockedSubscription === null) {
+                throw new Exception(
+                    'Subscription associated with this payment was not found.'
+                );
+            }
+
+            if ($lockedSubscription->userId !== $userId) {
+                throw new Exception(
+                    'You are not authorized to resume this payment.'
+                );
+            }
+
+            if ($lockedPayment->status !== 'pending') {
+                throw new Exception(
+                    'This payment is no longer pending.'
+                );
+            }
+
+            if ($lockedSubscription->status !== 'pending') {
+                throw new Exception(
+                    'This subscription is no longer pending.'
+                );
+            }
+
+            if (
+                !in_array(
+                    $lockedSubscription->billingPeriod,
+                    ['monthly', 'yearly'],
+                    true
+                )
+            ) {
+                throw new Exception(
+                    'Pending subscription has an invalid billing period.'
+                );
+            }
+
+            /*
+             * STEP 5: Check for an existing active attempt.
+             */
+            $existingAttempt = $this->attemptRepository
+                ->findActiveByPaymentId($lockedPayment->id);
+
+            if ($existingAttempt !== null) {
+
+                if ($existingAttempt->status === 'initializing') {
+                    throw new Exception(
+                        'A payment checkout is already being initialized. Please try again shortly.'
+                    );
+                }
+
+                if (
+                    $existingAttempt->status ===
+                    'initialization_unknown'
+                ) {
+                    throw new Exception(
+                        'The previous payment initialization outcome is unknown. Manual reconciliation is required before another attempt.'
+                    );
+                }
+
+                if (
+                    $existingAttempt->status === 'pending' &&
+                    !empty($existingAttempt->authorizationUrl)
+                ) {
+                    $db->commit();
+
+                    return [
+                        'subscription' => $lockedSubscription,
+                        'payment' => $lockedPayment,
+                        'amount' => $lockedPayment->amount,
+                        'currency' => $lockedPayment->currency,
+                        'reference' => $existingAttempt->reference,
+                        'authorization_url' =>
+                            $existingAttempt->authorizationUrl,
+                        'access_code' =>
+                            $existingAttempt->accessCode
+                    ];
+                }
+
+                throw new Exception(
+                    'An active payment attempt exists, but its checkout information is unavailable. Manual investigation is required.'
+                );
+            }
+
+            /*
+             * STEP 6: Create a durable attempt before contacting Paystack.
+             */
+            $newReference = $this->paystackService
                 ->generateReference();
 
+            $attemptNumber = $this->attemptRepository
+                ->findNextAttemptNumber($lockedPayment->id);
+
+            $attempt = $this->attemptRepository->create(
+                $lockedPayment->id,
+                $attemptNumber,
+                $newReference
+            );
+
+            if ($attempt === null) {
+                throw new Exception(
+                    'Unable to create a subscription payment attempt.'
+                );
+            }
+
+            /*
+             * Commit before making the external Paystack request.
+             */
+            $db->commit();
+
+        } catch (\Throwable $exception) {
+
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+
+            throw $exception;
+        }
+
         /*
-         * Initialize a new Paystack checkout using the
-         * existing subscription payment amount.
+         * STEP 7: Initialize Paystack outside the database transaction.
          */
-        $paystackTransaction =
-            $this->paystackService
+        try {
+            $paystackTransaction = $this->paystackService
                 ->initializeTransaction(
                     $user->email,
-                    (float) $payment->amount,
-                    $newReference,
+                    (float) $lockedPayment->amount,
+                    $attempt->reference,
                     [
-                        'type' =>
-                            'subscription',
-
-                        'user_id' =>
-                            $userId,
-
+                        'type' => 'subscription',
+                        'user_id' => $userId,
                         'subscription_id' =>
-                            $subscription->id,
-
+                            $lockedSubscription->id,
                         'plan_id' =>
-                            $subscription->planId,
-
+                            $lockedSubscription->planId,
                         'plan_version_id' =>
-                            $subscription->planVersionId
+                            $lockedSubscription->planVersionId,
+                        'billing_period' =>
+                            $lockedSubscription->billingPeriod,
+                        'payment_attempt_id' =>
+                            $attempt->id,
+                        'attempt_number' =>
+                            $attempt->attemptNumber
                     ]
                 );
 
-        /*
-         * Update the EXISTING payment record with the
-         * new Paystack reference.
-         *
-         * We do not create another payment row.
-         */
-        $referenceUpdated =
-            $this->paymentRepository
-                ->updateReference(
-                    $payment->id,
-                    $newReference
-                );
+        } catch (\Throwable $exception) {
 
-        if (!$referenceUpdated) {
+            /*
+             * Generic exceptions are treated conservatively:
+             * the provider may have received the request.
+             */
+            $outcomeUnknown = !(
+                    $exception instanceof PaystackInitializationException
+                ) || $exception->outcomeUnknown;
+
+            $newStatus = $outcomeUnknown
+                ? 'initialization_unknown'
+                : 'failed';
+
+            try {
+                $this->attemptRepository->updateStatus(
+                    $attempt->id,
+                    $newStatus,
+                    $exception->getMessage()
+                );
+            } catch (\Throwable $stateException) {
+                error_log(
+                    'Unable to update subscription payment attempt ' .
+                    $attempt->id . ': ' .
+                    $stateException->getMessage()
+                );
+            }
+
+            throw $exception;
+        }
+
+        /*
+         * STEP 8: Validate the Paystack response.
+         *
+         * A malformed successful response is treated as unknown,
+         * because Paystack may already have created the transaction.
+         */
+        if (
+            empty($paystackTransaction['reference']) ||
+            $paystackTransaction['reference'] !== $attempt->reference ||
+            empty($paystackTransaction['authorization_url'])
+        ) {
+            $reason = 'Paystack returned incomplete or invalid checkout information.';
+
+            $this->attemptRepository->updateStatus(
+                $attempt->id,
+                'initialization_unknown',
+                $reason
+            );
+
+            throw new Exception($reason);
+        }
+
+        /*
+         * STEP 9: Persist the checkout details.
+         *
+         * access_code is optional.
+         */
+        $checkoutSaved = $this->attemptRepository
+            ->updateCheckoutDetails(
+                $attempt->id,
+                $paystackTransaction['authorization_url'],
+                $paystackTransaction['access_code'] ?? null
+            );
+
+        if (!$checkoutSaved) {
+
+            $reason = 'Paystack initialized the transaction, but checkout details could not be saved. Reconciliation is required.';
+
+            $this->attemptRepository->updateStatus(
+                $attempt->id,
+                'initialization_unknown',
+                $reason
+            );
+
+            throw new Exception($reason);
+        }
+
+        /*
+         * STEP 10: Reload the parent payment.
+         *
+         * Its original reference must remain unchanged.
+         */
+        $updatedPayment = $this->paymentRepository
+            ->findById($lockedPayment->id);
+
+        $updatedSubscription = $this->subscriptionRepository
+            ->findById($lockedSubscription->id);
+
+        if (
+            $updatedPayment === null ||
+            $updatedSubscription === null
+        ) {
             throw new Exception(
-                'Paystack checkout was initialized, but the payment reference could not be updated.'
+                'Checkout was initialized, but subscription records could not be retrieved.'
+            );
+        }
+
+        $updatedAttempt = $this->attemptRepository
+            ->findById($attempt->id);
+
+        if ($updatedAttempt === null) {
+            throw new Exception(
+                'Checkout was initialized, but the payment attempt could not be retrieved.'
             );
         }
 
         /*
-         * Reload the payment so the returned object contains
-         * the new reference.
+         * STEP 11: Return the new attempt reference.
          */
-        $updatedPayment =
-            $this->paymentRepository
-                ->findById($payment->id);
-
         return [
-            'subscription' =>
-                $subscription,
-
-            'payment' =>
-                $updatedPayment,
-
-            'amount' =>
-                (float) $payment->amount,
-
-            'currency' =>
-                $payment->currency,
-
-            'reference' =>
-                $newReference,
-
+            'subscription' => $updatedSubscription,
+            'payment' => $updatedPayment,
+            'amount' => $updatedPayment->amount,
+            'currency' => $updatedPayment->currency,
+            'reference' => $updatedAttempt->reference,
             'authorization_url' =>
-                $paystackTransaction['authorization_url']
-                ?? null,
-
+                $updatedAttempt->authorizationUrl,
             'access_code' =>
-                $paystackTransaction['access_code']
-                ?? null
+                $updatedAttempt->accessCode
         ];
     }
 
@@ -994,5 +1845,122 @@ class SubscriptionService
             2
         );
     }
+
+
+    /**
+     * Resolve the subscription beneficiary from the authenticated user
+     * and selected plan.
+     *
+     * The frontend must never determine beneficiary identity.
+     */
+    private function resolveSubscriptionBeneficiary(
+        int $userId,
+        \App\Models\Plan $plan,
+        ?int $shopId = null
+    ): array {
+        switch ($plan->role) {
+            case 'BARBER':
+                if ($plan->scope !== 'HOME') {
+                    throw new Exception(
+                        'Barber subscriptions must use the HOME scope.'
+                    );
+                }
+
+                if ($shopId !== null) {
+                    throw new Exception(
+                        'shop_id is not applicable to a barber HOME subscription.'
+                    );
+                }
+
+                $barber = $this->barberRepository->findByUserId(
+                    $userId
+                );
+
+                if (!$barber) {
+                    throw new Exception(
+                        'Barber profile not found.'
+                    );
+                }
+
+                if (
+                    $barber->approvalStatus !== 'approved' ||
+                    $barber->status !== 'active'
+                ) {
+                    throw new Exception(
+                        'Your barber profile must be approved and active.'
+                    );
+                }
+
+                return [
+                    'scope' => 'HOME',
+                    'beneficiary_type' => 'BARBER',
+                    'beneficiary_id' => $barber->id,
+                ];
+
+            case 'SHOP_OWNER':
+                if ($plan->scope !== 'SHOP') {
+                    throw new Exception(
+                        'Shop owner subscriptions must use the SHOP scope.'
+                    );
+                }
+
+                if ($shopId === null) {
+                    throw new Exception(
+                        'shop_id is required for a shop subscription.'
+                    );
+                }
+
+                $shop = $this->shopRepository->findById(
+                    $shopId
+                );
+
+                if (!$shop || $shop->ownerId !== $userId) {
+                    throw new Exception(
+                        'The selected shop does not belong to your account.'
+                    );
+                }
+
+                if (
+                    $shop->approvalStatus !== 'approved' ||
+                    $shop->status !== 'active'
+                ) {
+                    throw new Exception(
+                        'The selected shop must be approved and active.'
+                    );
+                }
+
+                return [
+                    'scope' => 'SHOP',
+                    'beneficiary_type' => 'SHOP',
+                    'beneficiary_id' => $shop->id,
+                ];
+
+            case 'VENDOR':
+                if ($plan->scope !== 'VENDOR') {
+                    throw new Exception(
+                        'Vendor subscriptions must use the VENDOR scope.'
+                    );
+                }
+
+                if ($shopId !== null) {
+                    throw new Exception(
+                        'shop_id is not applicable to a vendor subscription.'
+                    );
+                }
+
+                return [
+                    'scope' => 'VENDOR',
+                    'beneficiary_type' => 'VENDOR',
+                    'beneficiary_id' => $userId,
+                ];
+
+            default:
+                throw new Exception(
+                    'Unsupported subscription plan role.'
+                );
+        }
+    }
+
+
 
 }

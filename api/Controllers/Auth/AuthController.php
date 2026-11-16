@@ -18,7 +18,10 @@ use App\Helpers\RequestBodyReader;
 use App\Helpers\TurnstileVerifierInterface;
 use App\Helpers\CloudflareTurnstileVerifier;
 use App\Helpers\RefreshTokenCookieManager;
+use App\Helpers\DatabaseManager;
+use App\Services\RefreshTokenRotationService;
 use App\Helpers\RefreshTokenCookieManagerInterface;
+use App\Issuers\JwtAccessTokenIssuer;
 
 class AuthController
 {
@@ -48,17 +51,32 @@ class AuthController
         $this->loginRiskAssessor = $loginRiskAssessor
             ?? new LoginRiskAssessor($redisManager);
 
-        $this->authService = $authService
-            ?? new AuthService(
-                new UserRepository(),
-                new SessionRepository(),
+        if ($authService !== null) {
+            $this->authService = $authService;
+        } else {
+            $connection = DatabaseManager::getConnection('users_db');
+
+            $userRepository = new UserRepository($connection);
+            $sessionRepository = new SessionRepository($connection);
+            $refreshTokenRotationService = new RefreshTokenRotationService(
+                $connection,
+                $sessionRepository,
+                $userRepository,
+                new JwtAccessTokenIssuer()
+            );
+
+            $this->authService = new AuthService(
+                $userRepository,
+                $sessionRepository,
                 new PasswordResetRepository(),
                 new MailService(),
                 $redisManager,
                 new AuditLogService(
                     new AuditLogRepository()
-                )
+                ),
+                $refreshTokenRotationService
             );
+        }
 
         $this->turnstileVerifier = $turnstileVerifier
             ?? new CloudflareTurnstileVerifier();
@@ -69,7 +87,6 @@ class AuthController
         $this->refreshTokenCookieManager = $refreshTokenCookieManager
             ?? new RefreshTokenCookieManager();
     }
-
 
 
     private function setRefreshTokenCookie(string $refreshToken): void
@@ -506,17 +523,21 @@ class AuthController
 
             // Unexpected errors should not be reported as authentication
             // failures because they may indicate a server-side problem.
-            $statusCode = $e instanceof \App\Exceptions\AuthenticationException
-                ? 401
-                : 500;
+            $statusCode = match (true) {
+                $e instanceof \App\Exceptions\AuthenticationException => 401,
+                $e instanceof \App\Exceptions\EmailNotVerifiedException => 403,
+                default => 500,
+            };
 
             http_response_code($statusCode);
 
             echo json_encode([
                 'status' => 'error',
-                'message' => $statusCode === 401
-                    ? 'Invalid or expired refresh token.'
-                    : 'Unable to refresh your session. Please try again.',
+                'message' => match ($statusCode) {
+                    401 => 'Invalid or expired refresh token.',
+                    403 => 'Email verification is required.',
+                    default => 'Unable to refresh your session. Please try again.',
+                },
             ]);
         }
     }

@@ -56,6 +56,28 @@ class SubscriptionController
                 trim($input['billing_period'] ?? '')
             );
 
+
+            $shopId = null;
+
+            if (isset($input['shop_id'])) {
+                if (
+                    !is_numeric($input['shop_id']) ||
+                    (int) $input['shop_id'] <= 0
+                ) {
+                    http_response_code(400);
+
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'shop_id must be a positive integer.'
+                    ]);
+
+                    return;
+                }
+
+                $shopId = (int) $input['shop_id'];
+            }
+
+
             if ($planId <= 0) {
                 http_response_code(400);
 
@@ -81,7 +103,8 @@ class SubscriptionController
             $result = $this->subscriptionService->createSubscription(
                 $userId,
                 $planId,
-                $billingPeriod
+                $billingPeriod,
+                $shopId
             );
 
             http_response_code(201);

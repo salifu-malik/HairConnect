@@ -11,6 +11,8 @@ class SubscriptionPayment
     public string $reference;
     public string $status;
     public ?string $paidAt;
+    public ?int $activatedAttemptId;
+
     public string $createdAt;
 
     public function __construct(array $data)
@@ -25,6 +27,9 @@ class SubscriptionPayment
         $this->status = $data['status'];
 
         $this->paidAt = $data['paid_at'] ?? null;
+        $this->activatedAttemptId = isset($data['activated_attempt_id'])
+            ? (int) $data['activated_attempt_id']
+            : null;
         $this->createdAt = $data['created_at'];
     }
 

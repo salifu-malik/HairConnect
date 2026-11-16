@@ -10,8 +10,10 @@ use PDO;
 class UserRepository {
     private PDO $db;
 
-    public function __construct() {
-        $this->db = DatabaseManager::getConnection('users_db');
+    public function __construct(?PDO $connection = null)
+    {
+        $this->db = $connection
+            ?? DatabaseManager::getConnection('users_db');
     }
 
 
@@ -42,6 +44,43 @@ class UserRepository {
         $stmt = $this->db->prepare("SELECT * FROM users WHERE id = :id");
         $stmt->execute(['id' => $id]);
         $data = $stmt->fetch();
+        return $data ? new User($data) : null;
+    }
+
+
+    public function findByIdForUpdate(int $id): ?User
+    {
+        if (!$this->db->inTransaction()) {
+            throw new \LogicException(
+                'Locking a user row requires an active transaction.'
+            );
+        }
+
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM users
+        WHERE id = :id
+        LIMIT 1
+        FOR UPDATE
+    ");
+
+        $stmt->execute(['id' => $id]);
+
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $data ? new User($data) : null;
+    }
+
+    public function findByPublicId(string $publicId): ?User
+    {
+        $stmt = $this->db->prepare(
+            "SELECT * FROM users WHERE public_id = :public_id LIMIT 1"
+        );
+
+        $stmt->execute(['public_id' => $publicId]);
+
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
         return $data ? new User($data) : null;
     }
 
@@ -208,7 +247,10 @@ class UserRepository {
         return $stmt->rowCount() > 0;
     }
 
-
+    public function usesConnection(PDO $connection): bool
+    {
+        return $this->db === $connection;
+    }
 
 }
 

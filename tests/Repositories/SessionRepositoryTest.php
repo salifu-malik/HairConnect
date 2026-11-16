@@ -17,6 +17,10 @@ final class SessionRepositoryTest extends TestCase
     /** @var string[] Raw test tokens whose hashes may need cleanup */
     private array $testTokens = [];
 
+
+    /** @var int[] Test user IDs requiring cleanup */
+    private array $testUserIds = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -55,9 +59,21 @@ final class SessionRepositoryTest extends TestCase
                     'token' => hash('sha256', $token),
                 ]);
             }
+
+
+            foreach ($this->testUserIds as $userId) {
+                $stmt = $this->pdo->prepare(
+                    'DELETE FROM users WHERE id = :id'
+                );
+
+                $stmt->execute(['id' => $userId]);
+            }
         }
 
+
         $this->testTokens = [];
+
+        $this->testUserIds = [];
 
         parent::tearDown();
     }
@@ -86,6 +102,66 @@ final class SessionRepositoryTest extends TestCase
             'refresh_token' => hash('sha256', $token),
             'expires_at' => $expiresAt,
         ]);
+    }
+
+
+    private function insertTestUser(
+        string $status = 'active',
+        ?string $emailVerifiedAt = '2026-01-01 00:00:00'
+    ): int {
+        // Generate a unique UUID v4.
+        $bytes = random_bytes(16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+
+        $hex = bin2hex($bytes);
+
+        $publicId = sprintf(
+            '%s-%s-%s-%s-%s',
+            substr($hex, 0, 8),
+            substr($hex, 8, 4),
+            substr($hex, 12, 4),
+            substr($hex, 16, 4),
+            substr($hex, 20, 12)
+        );
+
+        $email = 'session-test-' . bin2hex(random_bytes(8)) . '@example.test';
+
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO users (
+            first_name,
+            last_name,
+            email,
+            password_hash,
+            status,
+            email_verified_at,
+            public_id
+        ) VALUES (
+            :first_name,
+            :last_name,
+            :email,
+            :password_hash,
+            :status,
+            :email_verified_at,
+            :public_id
+        )'
+        );
+
+        $stmt->execute([
+            'first_name' => 'Test',
+            'last_name' => 'User',
+            'email' => $email,
+            'password_hash' => password_hash('test-password', PASSWORD_DEFAULT),
+            'status' => $status,
+            'email_verified_at' => $emailVerifiedAt,
+            'public_id' => $publicId,
+        ]);
+
+        $userId = (int) $this->pdo->lastInsertId();
+
+        $this->testUserIds[] = $userId;
+
+        return $userId;
     }
 
     private function sessionExists(string $token): bool
@@ -417,12 +493,25 @@ final class SessionRepositoryTest extends TestCase
             );
         } finally {
             // Reap any remaining workers before deleting temporary files.
-            foreach ($pids as $pid) {
-                $result = pcntl_waitpid($pid, $status, WNOHANG);
+            foreach ($pids as $index => $pid) {
+                pcntl_waitpid($pid, $status);
 
-                if ($result === 0) {
-                    pcntl_waitpid($pid, $status);
-                }
+                $resultFile = $index === 0 ? $resultA : $resultB;
+
+                $workerOutput = file_exists($resultFile)
+                    ? file_get_contents($resultFile)
+                    : 'No result file was created.';
+
+                $this->assertTrue(
+                    pcntl_wifexited($status),
+                    "Worker {$pid} did not exit normally. Output: {$workerOutput}"
+                );
+
+                $this->assertSame(
+                    0,
+                    pcntl_wexitstatus($status),
+                    "Worker {$pid} failed. Output: {$workerOutput}"
+                );
             }
 
             foreach ([$startFile, $resultA, $resultB] as $file) {
@@ -436,4 +525,6 @@ final class SessionRepositoryTest extends TestCase
             }
         }
     }
+
+    
 }

@@ -24,17 +24,29 @@ class AuthService
     private PasswordResetRepository $passwordResetRepository;
     private RedisManager $redisManager;
     private MailService $mailService;
+
+    private RefreshTokenRotationService $refreshTokenRotationService;
     private AuditLogService $auditLogService;
     private \App\Helpers\LoginRiskAssessor $loginRiskAssessor;
 
-    public function __construct(UserRepository $userRepository, SessionRepository $sessionRepository,  PasswordResetRepository $passwordResetRepository, MailService $mailService, RedisManager $redisManager, AuditLogService $auditLogService)
-    {
+    public function __construct(
+        UserRepository $userRepository,
+        SessionRepository $sessionRepository,
+        PasswordResetRepository $passwordResetRepository,
+        MailService $mailService,
+        RedisManager $redisManager,
+        AuditLogService $auditLogService,
+        RefreshTokenRotationService $refreshTokenRotationService
+    ) {
         $this->userRepository = $userRepository;
         $this->sessionRepository = $sessionRepository;
         $this->passwordResetRepository = $passwordResetRepository;
         $this->mailService = $mailService;
         $this->redisManager = $redisManager;
         $this->auditLogService = $auditLogService;
+
+        $this->refreshTokenRotationService = $refreshTokenRotationService;
+
         $this->loginRiskAssessor = new \App\Helpers\LoginRiskAssessor(
             $redisManager
         );
@@ -464,7 +476,6 @@ class AuthService
             );
         }
 
-        // Generate a replacement refresh token.
         $newRefreshToken = bin2hex(random_bytes(64));
 
         $expiresAt = date(
@@ -472,43 +483,27 @@ class AuthService
             time() + (7 * 24 * 3600)
         );
 
-        /*
-         * Atomically consume the existing refresh token
-         * and create its replacement.
-         */
-        $session = $this->sessionRepository->rotateToken(
+        $result = $this->refreshTokenRotationService->rotate(
             $refreshToken,
             $newRefreshToken,
             $expiresAt
         );
 
-        if (!$session) {
+        if ($result['status'] === 'email_unverified') {
+            throw new EmailNotVerifiedException(
+                'Email verification is required.'
+            );
+        }
+
+        if ($result['status'] !== 'rotated') {
             throw new AuthenticationException(
                 'Invalid or expired refresh token.'
             );
         }
 
-        // Retrieve the user associated with the consumed session.
-        $user = $this->userRepository->findById(
-            (int) $session['user_id']
-        );
+        $user = $result['user'];
 
-        if (!$user) {
-            throw new \RuntimeException(
-                'User associated with the refresh session was not found.'
-            );
-        }
-
-        $roles = $this->userRepository->getRoles($user->id);
-        $user->roles = $roles;
-
-        // Issue a new access token.
-        $accessToken = JwtHelper::encode([
-            'user_id' => $user->id,
-            'email' => $user->email,
-            'roles' => $roles,
-        ], 3600);
-
+        // Audit logging remains best-effort.
         $this->auditLogService->auth(
             'TOKEN_REFRESH',
             $user,
@@ -516,8 +511,8 @@ class AuthService
         );
 
         return [
-            'token' => $accessToken,
-            'refresh_token' => $newRefreshToken,
+            'token' => $result['token'],
+            'refresh_token' => $result['refresh_token'],
         ];
     }
 

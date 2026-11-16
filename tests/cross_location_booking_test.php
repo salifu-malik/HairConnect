@@ -32,7 +32,8 @@ $bookingService = new BookingService(
     $appointmentRepository,
     $barberScheduleRepository,
     $subscriptionRepository,
-    new CustomerBookingRestrictionRepository()
+    new CustomerBookingRestrictionRepository(),
+    new \App\Repositories\BarberShopMembershipRepository()
 );
 
 $barberId = 1;

@@ -85,7 +85,7 @@ class ChatService
         if (in_array('CUSTOMER', $roles, true)) {
             $financeStmt = $this->usersDb->query("
             SELECT
-                u.id AS user_id,
+                u.public_id AS user_id,
                 u.first_name,
                 u.last_name,
                 u.profile_image
@@ -123,7 +123,7 @@ class ChatService
          */
         $vendorStmt = $this->storeDb->prepare("
     SELECT DISTINCT
-        u.id AS user_id,
+        u.public_id AS user_id,
         u.first_name,
         u.last_name,
         u.profile_image,
@@ -159,7 +159,7 @@ class ChatService
          */
         $barberStmt = $this->bookingDb->prepare("
         SELECT DISTINCT
-            u.id AS user_id,
+            u.public_id AS user_id,
             u.first_name,
             u.last_name,
             u.profile_image,
@@ -196,7 +196,7 @@ class ChatService
          */
         $shopStmt = $this->bookingDb->prepare("
         SELECT DISTINCT
-            u.id AS user_id,
+            u.public_id AS user_id,
             u.first_name,
             u.last_name,
             u.profile_image,
@@ -241,7 +241,8 @@ class ChatService
         string $type,
         int $recipientId,
         int $relatedId
-    ): array {
+    ): array
+    {
         $this->requireValidUserId($userId);
         $this->requireValidUserId($recipientId);
 
@@ -409,7 +410,7 @@ class ChatService
 
         if ($existing) {
             return [
-                'id' => (int) $existing['id'],
+                'conversation_id' => $existing['public_id'],
                 'conversation_type' => $type,
                 'created' => false,
             ];
@@ -424,8 +425,19 @@ class ChatService
             'created_by' => $userId,
         ]);
 
+// Retrieve the created conversation to obtain its public UUID.
+        $conversation = $this->conversationRepository->findById(
+            $conversationId
+        );
+
+        if (!$conversation || empty($conversation['public_id'])) {
+            throw new RuntimeException(
+                'Could not retrieve the created conversation.'
+            );
+        }
+
         return [
-            'id' => $conversationId,
+            'conversation_id' => $conversation['public_id'],
             'conversation_type' => $type,
             'created' => true,
         ];
@@ -433,37 +445,91 @@ class ChatService
 
 
 
-   // Retrieve messages when the authenticated user is a participant.
 
+
+    /**
+     * Retrieve messages for a conversation participant.
+     * Public UUIDs are returned instead of internal user and conversation IDs.
+     */
     public function getMessages(
-        int $conversationId,
+        string $conversationPublicId,
         int $userId,
         int $limit = 100,
         int $beforeId = 0
     ): array {
         $this->requireValidUserId($userId);
 
-        if ($conversationId <= 0) {
-            throw new RuntimeException('Invalid conversation ID.');
+        if ($limit < 1 || $limit > 100 || $beforeId < 0) {
+            throw new RuntimeException('Invalid pagination parameters.');
         }
 
-        $conversation = $this->conversationRepository
-            ->findForParticipant($conversationId, $userId);
+        $conversation = $this->resolveConversationForParticipant(
+            $conversationPublicId,
+            $userId
+        );
 
-        if (!$conversation) {
-            throw new RuntimeException(
-                'Conversation not found or access denied.'
-            );
-        }
+        $internalConversationId = (int) $conversation['id'];
 
-        $this->ensureConversationNotExpired($conversation);
-
-        return $this->messageRepository->findByConversationId(
-            $conversationId,
+        $messages = $this->messageRepository->findByConversationId(
+            $internalConversationId,
             $limit,
             $beforeId
         );
+
+        if (empty($messages)) {
+            return [];
+        }
+
+        // Collect the internal sender IDs for UUID lookup.
+        $senderIds = array_values(array_unique(array_map(
+            'intval',
+            array_column($messages, 'sender_id')
+        )));
+
+        $placeholders = [];
+        $params = [];
+
+        foreach ($senderIds as $index => $senderId) {
+            $placeholder = ':sender_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $senderId;
+        }
+
+        $sql = '
+        SELECT id, public_id
+        FROM users
+        WHERE id IN (' . implode(', ', $placeholders) . ')
+    ';
+
+        $stmt = $this->usersDb->prepare($sql);
+        $stmt->execute($params);
+
+        $publicIdsByInternalId = [];
+
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $user) {
+            $publicIdsByInternalId[(int) $user['id']] = $user['public_id'];
+        }
+
+        // Convert internal identifiers before returning the API response.
+        foreach ($messages as &$message) {
+            $internalSenderId = (int) $message['sender_id'];
+
+            if (!isset($publicIdsByInternalId[$internalSenderId])) {
+                throw new RuntimeException(
+                    'Unable to resolve a message sender.'
+                );
+            }
+
+            $message['sender_id'] = $publicIdsByInternalId[$internalSenderId];
+            $message['conversation_id'] = $conversationPublicId;
+        }
+
+        unset($message);
+
+        return $messages;
     }
+
+
 
     /**
      * Send a message to an existing conversation.
@@ -471,15 +537,18 @@ class ChatService
      * Never accept the sender ID directly from frontend request data.
      */
     public function sendMessage(
-        int $conversationId,
+        string $conversationPublicId,
         int $senderId,
         string $content
     ): array {
         $this->requireValidUserId($senderId);
 
-        if ($conversationId <= 0) {
-            throw new RuntimeException('Invalid conversation ID.');
-        }
+        $conversation = $this->resolveConversationForParticipant(
+            $conversationPublicId,
+            $senderId
+        );
+
+        $conversationId = (int) $conversation['id'];
 
         $content = trim($content);
 
@@ -548,12 +617,33 @@ class ChatService
 
             $this->db->commit();
 
+            // Resolve the sender's public UUID for the API response.
+            $senderStmt = $this->usersDb->prepare("
+    SELECT public_id
+    FROM users
+    WHERE id = :id
+    LIMIT 1
+");
+
+            $senderStmt->execute(['id' => $senderId]);
+            $senderPublicId = $senderStmt->fetchColumn();
+
+            if (!$senderPublicId) {
+                throw new RuntimeException(
+                    'Unable to resolve the message sender.'
+                );
+            }
+
             return [
                 'id' => $messageId,
-                'conversation_id' => $conversationId,
-                'sender_id' => $senderId,
+                'conversation_id' => $conversationPublicId,
+                'sender_id' => $senderPublicId,
                 'content' => $content,
+                'created_at' => gmdate('Y-m-d H:i:s'),
+                'delivered_at' => null,
+                'read_at' => null,
             ];
+
         } catch (Throwable $e) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
@@ -611,6 +701,43 @@ class ChatService
         }
     }
 
+
+    /**
+     * Resolve a public conversation UUID to its internal database ID.
+     *
+     * Access is granted only if the authenticated user participates
+     * in the conversation.
+     */
+    private function resolveConversationForParticipant(
+        string $publicId,
+        int $userId
+    ): array {
+        if (
+            !preg_match(
+                '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+                $publicId
+            )
+        ) {
+            throw new RuntimeException('Invalid conversation ID.');
+        }
+
+        $this->requireValidUserId($userId);
+
+        $conversation = $this->conversationRepository
+            ->findForParticipantByPublicId($publicId, $userId);
+
+        if (!$conversation) {
+            throw new RuntimeException(
+                'Conversation not found or access denied.'
+            );
+        }
+
+        $this->ensureConversationNotExpired($conversation);
+
+        return $conversation;
+    }
+
+
     private function requireValidUserId(int $userId): void
     {
         if ($userId <= 0) {
@@ -631,7 +758,7 @@ class ChatService
         int $participantOneId,
         int $participantTwoId,
         int $createdBy
-    ): int {
+    ): string {
         $this->requireValidUserId($participantOneId);
         $this->requireValidUserId($participantTwoId);
         $this->requireValidUserId($createdBy);
@@ -651,12 +778,26 @@ class ChatService
             );
         }
 
-        return $this->conversationRepository->create([
+        // Create the conversation using internal database IDs.
+        $conversationId = $this->conversationRepository->create([
             'conversation_type' => 'COMPLAINT',
             'participant_one_id' => $participantOneId,
             'participant_two_id' => $participantTwoId,
             'created_by' => $createdBy,
         ]);
+
+        // Resolve the public UUID for the API response.
+        $conversation = $this->conversationRepository->findById(
+            $conversationId
+        );
+
+        if (!$conversation || empty($conversation['public_id'])) {
+            throw new RuntimeException(
+                'Could not retrieve the created complaint conversation.'
+            );
+        }
+
+        return $conversation['public_id'];
     }
 
     /**
@@ -665,14 +806,28 @@ class ChatService
      * has the ADMIN or FINANCE_MANAGER role.
      */
     public function deleteComplaintConversation(
-        int $conversationId,
+        string $conversationPublicId,
         int $deletedBy
     ): void {
         $this->requireValidUserId($deletedBy);
 
-        if ($conversationId <= 0) {
+        if (
+            !preg_match(
+                '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+                $conversationPublicId
+            )
+        ) {
             throw new RuntimeException('Invalid conversation ID.');
         }
+
+        $conversation = $this->conversationRepository
+            ->findByPublicId($conversationPublicId);
+
+        if (!$conversation) {
+            throw new RuntimeException('Conversation not found.');
+        }
+
+        $conversationId = (int) $conversation['id'];
 
         $this->db->beginTransaction();
 
@@ -695,12 +850,14 @@ class ChatService
             // Record the deletion independently of the conversation row.
             $audit = $this->db->prepare("
             INSERT INTO conversation_deletion_audit (
-                original_conversation_id,
-                deleted_by
-            ) VALUES (
-                :conversation_id,
-                :deleted_by
-            )
+    original_conversation_id,
+    deleted_by,
+    deletion_source
+) VALUES (
+    :conversation_id,
+    :deleted_by,
+    'MANUAL'
+)
         ");
 
             $audit->execute([
@@ -746,21 +903,17 @@ class ChatService
 
 
     public function markMessagesAsDelivered(
-        int $conversationId,
+        string $conversationPublicId,
         int $recipientId
     ): int {
         $this->requireValidUserId($recipientId);
 
-        $conversation = $this->conversationRepository
-            ->findForParticipant($conversationId, $recipientId);
+        $conversation = $this->resolveConversationForParticipant(
+            $conversationPublicId,
+            $recipientId
+        );
 
-        if (!$conversation) {
-            throw new RuntimeException(
-                'Conversation not found or access denied.'
-            );
-        }
-
-        $this->ensureConversationNotExpired($conversation);
+        $conversationId = (int) $conversation['id'];
 
         return $this->messageRepository->markAsDelivered(
             $conversationId,
@@ -769,21 +922,17 @@ class ChatService
     }
 
     public function markMessagesAsRead(
-        int $conversationId,
+        string $conversationPublicId,
         int $recipientId
     ): int {
         $this->requireValidUserId($recipientId);
 
-        $conversation = $this->conversationRepository
-            ->findForParticipant($conversationId, $recipientId);
+        $conversation = $this->resolveConversationForParticipant(
+            $conversationPublicId,
+            $recipientId
+        );
 
-        if (!$conversation) {
-            throw new RuntimeException(
-                'Conversation not found or access denied.'
-            );
-        }
-
-        $this->ensureConversationNotExpired($conversation);
+        $conversationId = (int) $conversation['id'];
 
         return $this->messageRepository->markAsRead(
             $conversationId,

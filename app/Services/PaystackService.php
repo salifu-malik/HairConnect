@@ -60,36 +60,43 @@ class PaystackService
     ): array {
         $payload = [
             'email' => $email,
-
-            // Paystack expects the amount in pesewas.
             'amount' => (int) round($amount * 100),
-
             'currency' => 'GHS',
-
             'reference' => $reference,
-
             'callback_url' => $this->callbackUrl,
-
             'metadata' => $metadata
         ];
+
+        $jsonPayload = json_encode($payload);
+
+        if ($jsonPayload === false) {
+            throw new PaystackInitializationException(
+                'Unable to encode Paystack initialization payload.',
+                false
+            );
+        }
 
         $ch = curl_init(
             $this->baseUrl . '/transaction/initialize'
         );
 
+        if ($ch === false) {
+            throw new PaystackInitializationException(
+                'Unable to initialize Paystack HTTP request.',
+                false
+            );
+        }
+
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
-
             CURLOPT_RETURNTRANSFER => true,
-
             CURLOPT_HTTPHEADER => [
                 'Authorization: Bearer ' . $this->secretKey,
                 'Content-Type: application/json',
                 'Accept: application/json'
             ],
-
-            CURLOPT_POSTFIELDS => json_encode($payload),
-
+            CURLOPT_POSTFIELDS => $jsonPayload,
+            CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_TIMEOUT => 30
         ]);
 
@@ -97,42 +104,55 @@ class PaystackService
 
         if ($response === false) {
             $error = curl_error($ch);
-
             curl_close($ch);
 
-            throw new Exception(
-                'Unable to connect to Paystack: ' . $error
+            throw new PaystackInitializationException(
+                'Paystack initialization outcome is unknown: ' . $error,
+                true
             );
         }
 
-        $httpCode = curl_getinfo(
+        $httpCode = (int) curl_getinfo(
             $ch,
             CURLINFO_HTTP_CODE
         );
 
         curl_close($ch);
 
-        $decoded = json_decode(
-            $response,
-            true
-        );
+        $decoded = json_decode($response, true);
 
         if (!is_array($decoded)) {
-            throw new Exception(
-                'Invalid response received from Paystack.'
+            throw new PaystackInitializationException(
+                'Paystack returned an invalid response. Initialization outcome is unknown.',
+                true
             );
         }
 
-        if (
-            $httpCode < 200 ||
-            $httpCode >= 300 ||
-            !($decoded['status'] ?? false)
-        ) {
-            $message =
-                $decoded['message']
-                ?? 'Paystack transaction initialization failed.';
+        if ($httpCode >= 500 || $httpCode < 200 || $httpCode >= 300) {
+            $message = $decoded['message']
+                ?? 'Paystack initialization request failed.';
 
-            throw new Exception($message);
+            $outcomeUnknown = $httpCode >= 500;
+
+            throw new PaystackInitializationException(
+                $message,
+                $outcomeUnknown
+            );
+        }
+
+        if (!($decoded['status'] ?? false)) {
+            throw new PaystackInitializationException(
+                $decoded['message']
+                ?? 'Paystack rejected the initialization request.',
+                false
+            );
+        }
+
+        if (!isset($decoded['data']) || !is_array($decoded['data'])) {
+            throw new PaystackInitializationException(
+                'Paystack returned an incomplete initialization response.',
+                true
+            );
         }
 
         return $decoded['data'];

@@ -44,10 +44,16 @@ class CrossBarberFixtureRepository extends BarberRepository
 
 class CrossBarberFixtureSubscriptionRepository extends SubscriptionRepository
 {
-    public function hasActiveSubscription(int $userId): bool
-    {
-        // Simulate an active subscription for the fixture only.
-        return $userId === 23;
+    public function hasActiveEntitlement(
+        string $beneficiaryType,
+        int $beneficiaryId,
+        string $scope
+    ): bool {
+        return (
+            $beneficiaryType === 'BARBER' &&
+            $beneficiaryId === 2 &&
+            $scope === 'HOME'
+        );
     }
 }
 
@@ -160,7 +166,8 @@ try {
         new AppointmentRepository(),
         new CrossBarberFixtureScheduleRepository(),
         new CrossBarberFixtureSubscriptionRepository(),
-        new CustomerBookingRestrictionRepository()
+        new CustomerBookingRestrictionRepository(),
+        new \App\Repositories\BarberShopMembershipRepository()
     );
 
     $countBeforeStmt = $db->prepare("
@@ -179,6 +186,10 @@ try {
                 'service_location' => 'HOME',
                 'appointment_date' => $appointmentDate,
                 'appointment_time' => '12:00',
+                'home_service_customer_name' => 'Test Customer',
+                'home_service_phone' => '0240000000',
+                'home_service_region' => 'Greater Accra',
+                'home_service_address' => 'Test Street, Accra',
             ],
             $customerId
         );

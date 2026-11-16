@@ -6,6 +6,7 @@ class Plan
 {
     public int $id;
     public string $name;
+    public string $scope;
     public string $role;
     public ?array $features;
     public string $createdAt;
@@ -15,12 +16,14 @@ class Plan
         $this->id = (int) $data['id'];
         $this->name = $data['name'];
         $this->role = $data['role'];
+	$this->scope = $data['scope'];
 
         $this->features = isset($data['features'])
             ? json_decode($data['features'], true)
             : null;
 
         $this->createdAt = $data['created_at'];
+	
     }
 
     public function jsonSerialize(): array
@@ -29,6 +32,7 @@ class Plan
             'id' => $this->id,
             'name' => $this->name,
             'role' => $this->role,
+            'scope' => $this->scope,
             'features' => $this->features,
             'created_at' => $this->createdAt,
         ];

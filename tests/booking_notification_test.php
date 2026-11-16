@@ -243,6 +243,7 @@ try {
         new BarberScheduleRepository(),
         new SubscriptionRepository(),
         new CustomerBookingRestrictionRepository(),
+        new \App\Repositories\BarberShopMembershipRepository(),
         new NotificationRepository()
     );
 
@@ -351,6 +352,10 @@ try {
         'service_location' => 'HOME',
         'appointment_date' => $date,
         'appointment_time' => '12:00',
+        'home_service_customer_name' => 'Test Customer',
+        'home_service_phone' => '0240000000',
+        'home_service_region' => 'Greater Accra',
+        'home_service_address' => 'Test Street, Accra',
     ], $homeCustomerId);
 
     $homeAppointment = findNewTestAppointment(

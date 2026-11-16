@@ -50,65 +50,125 @@ class ChatController
 
     /**
      * POST /api/chat/conversations
-     *
      * JSON body:
      * {
      *     "conversation_type": "HOME_SERVICE",
-     *     "recipient_id": 23,
+     *     "recipient_id": "550e8400-e29b-41d4-a716-446655440000",
      *     "related_id": 146
      * }
+     * recipient_id is the recipient's public UUID.
+     * related_id is currently the internal order or appointment ID.
      */
     public function startBusinessConversation(): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
         try {
+            // Authenticate the current user.
             $auth = AuthMiddleware::authenticate();
             $userId = (int) $auth['user']->id;
 
+            // Read and validate the request body.
             $data = $this->readJsonBody();
 
             $type = $data['conversation_type'] ?? '';
-            $recipientId = filter_var(
-                $data['recipient_id'] ?? null,
-                FILTER_VALIDATE_INT
-            );
+            $recipientPublicId = $data['recipient_id'] ?? null;
+
             $relatedId = filter_var(
                 $data['related_id'] ?? null,
                 FILTER_VALIDATE_INT
             );
 
+            // Supported business conversation types.
             $allowedTypes = [
                 'PRODUCT_ORDER',
                 'HOME_SERVICE',
                 'SHOP_SERVICE',
             ];
 
+            // Validate the conversation type.
             if (
                 !is_string($type)
                 || !in_array($type, $allowedTypes, true)
-                || $recipientId === false
-                || $recipientId === null
-                || $recipientId <= 0
-                || $relatedId === false
-                || $relatedId === null
-                || $relatedId <= 0
             ) {
                 $this->respond(400, [
                     'status' => 'error',
-                    'message' => 'Valid conversation details are required.',
+                    'message' => 'Invalid conversation type.',
                 ]);
 
                 return;
             }
 
+            // Validate the recipient's public UUID.
+            if (
+                !is_string($recipientPublicId)
+                || !preg_match(
+                    '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+                    $recipientPublicId
+                )
+            ) {
+                $this->respond(400, [
+                    'status' => 'error',
+                    'message' => 'A valid recipient ID is required.',
+                ]);
+
+                return;
+            }
+
+            // Validate the related order or appointment ID.
+            if (
+                $relatedId === false
+                || $relatedId === null
+                || $relatedId <= 0
+            ) {
+                $this->respond(400, [
+                    'status' => 'error',
+                    'message' => 'A valid order or appointment ID is required.',
+                ]);
+
+                return;
+            }
+
+            // Resolve the public UUID to the internal user record.
+            $recipient = $this->userRepository->findByPublicId(
+                $recipientPublicId
+            );
+
+            if (
+                !$recipient
+                || $recipient->status !== 'active'
+            ) {
+                $this->respond(404, [
+                    'status' => 'error',
+                    'message' => 'Recipient not found or inactive.',
+                ]);
+
+                return;
+            }
+
+            // Use the internal numeric ID only inside the backend.
+            $recipientId = $recipient->id;
+
+            // Prevent users from messaging themselves.
+            if ($userId === $recipientId) {
+                $this->respond(400, [
+                    'status' => 'error',
+                    'message' => 'You cannot start a conversation with yourself.',
+                ]);
+
+                return;
+            }
+
+            // The service verifies the user's role and the relationship
+            // between the customer, recipient, order, or appointment.
             $conversation = $this->chatService->startBusinessConversation(
                 $userId,
                 $type,
-                (int) $recipientId,
+                $recipientId,
                 (int) $relatedId
             );
 
+            // Return the result.
             $this->respond(
                 $conversation['created'] ? 201 : 200,
                 [
@@ -158,7 +218,7 @@ class ChatController
      *   limit=100
      *   before_id=123
      */
-    public function getMessages(int $conversationId): void
+    public function getMessages(string $conversationPublicId): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
@@ -190,7 +250,7 @@ class ChatController
             }
 
             $messages = $this->chatService->getMessages(
-                $conversationId,
+                $conversationPublicId,
                 $userId,
                 $limit,
                 $beforeId
@@ -213,7 +273,7 @@ class ChatController
      *     "content": "Hello"
      * }
      */
-    public function sendMessage(int $conversationId): void
+    public function sendMessage(string $conversationPublicId): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
@@ -233,7 +293,7 @@ class ChatController
             }
 
             $message = $this->chatService->sendMessage(
-                $conversationId,
+                $conversationPublicId,
                 $userId,
                 $data['content']
             );
@@ -252,7 +312,7 @@ class ChatController
      *
      * JSON body:
      * {
-     *     "recipient_id": 123
+     *     "recipient_id": "recipient-public-uuid"
      * }
      *
      * A non-staff user must contact an administrator or
@@ -270,31 +330,43 @@ class ChatController
 
             $data = $this->readJsonBody();
 
-            $recipientId = filter_var(
-                $data['recipient_id'] ?? null,
-                FILTER_VALIDATE_INT
-            );
+            $recipientPublicId = $data['recipient_id'] ?? null;
 
             if (
-                $recipientId === false
-                || $recipientId === null
-                || $recipientId <= 0
-                || $recipientId === $creatorId
+                !is_string($recipientPublicId)
+                || !preg_match(
+                    '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+                    $recipientPublicId
+                )
             ) {
                 $this->respond(400, [
                     'status' => 'error',
-                    'message' => 'A valid recipient is required.',
+                    'message' => 'A valid recipient UUID is required.',
                 ]);
 
                 return;
             }
 
-            $recipient = $this->userRepository->findById($recipientId);
+            $recipient = $this->userRepository->findByPublicId(
+                $recipientPublicId
+            );
 
             if (!$recipient || $recipient->status !== 'active') {
                 $this->respond(404, [
                     'status' => 'error',
                     'message' => 'Recipient not found or inactive.',
+                ]);
+
+                return;
+            }
+
+// Use the internal numeric ID only inside the backend.
+            $recipientId = (int) $recipient->id;
+
+            if ($recipientId === $creatorId) {
+                $this->respond(400, [
+                    'status' => 'error',
+                    'message' => 'You cannot create a complaint conversation with yourself.',
                 ]);
 
                 return;
@@ -332,7 +404,7 @@ class ChatController
                 'status' => 'success',
                 'message' => 'Complaint conversation created.',
                 'data' => [
-                    'id' => $conversationId,
+                    'conversation_id' => $conversationId,
                     'conversation_type' => 'COMPLAINT',
                 ],
             ]);
@@ -347,7 +419,7 @@ class ChatController
      * Only ADMIN and FINANCE_MANAGER may use this endpoint.
      * Only complaint conversations may be deleted.
      */
-    public function deleteComplaint(int $conversationId): void
+    public function deleteComplaint(string $conversationPublicId): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
@@ -370,7 +442,7 @@ class ChatController
             }
 
             $this->chatService->deleteComplaintConversation(
-                $conversationId,
+                $conversationPublicId,
                 $userId
             );
 
@@ -472,7 +544,7 @@ class ChatController
     /**
      * POST /api/chat/messages/{conversationId}/delivered
      */
-    public function markMessagesAsDelivered(int $conversationId): void
+    public function markMessagesAsDelivered(string $conversationPublicId): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
@@ -481,7 +553,7 @@ class ChatController
             $userId = (int) $auth['user']->id;
 
             $updated = $this->chatService->markMessagesAsDelivered(
-                $conversationId,
+                $conversationPublicId,
                 $userId
             );
 
@@ -500,7 +572,7 @@ class ChatController
     /**
      * POST /api/chat/messages/{conversationId}/read
      */
-    public function markMessagesAsRead(int $conversationId): void
+    public function markMessagesAsRead(string $conversationPublicId): void
     {
         header('Content-Type: application/json; charset=UTF-8');
 
@@ -509,7 +581,7 @@ class ChatController
             $userId = (int) $auth['user']->id;
 
             $updated = $this->chatService->markMessagesAsRead(
-                $conversationId,
+                $conversationPublicId,
                 $userId
             );
 

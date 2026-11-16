@@ -95,6 +95,84 @@ class SessionRepository
     }
 
 
+    public function lockValidSessionByToken(
+        string $refreshToken
+    ): ?array {
+
+        if (!$this->db->inTransaction()) {
+            throw new \LogicException(
+                'Locking a refresh session requires an active transaction.'
+            );
+        }
+        $tokenHash = hash('sha256', $refreshToken);
+
+        $stmt = $this->db->prepare("
+        SELECT *
+        FROM sessions
+        WHERE refresh_token = :refresh_token
+          AND expires_at > NOW()
+        LIMIT 1
+        FOR UPDATE
+    ");
+
+        $stmt->execute([
+            'refresh_token' => $tokenHash,
+        ]);
+
+        $session = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $session ?: null;
+    }
+
+    public function replaceTokenWithinTransaction(
+        string $currentRefreshToken,
+        string $newRefreshToken,
+        int $userId,
+        string $newExpiresAt
+    ): void {
+        if (!$this->db->inTransaction()) {
+            throw new \LogicException(
+                'Token replacement requires an active transaction.'
+            );
+        }
+
+        $deleteStmt = $this->db->prepare("
+        DELETE FROM sessions
+        WHERE refresh_token = :refresh_token
+          AND user_id = :user_id
+    ");
+
+        $deleteStmt->execute([
+            'refresh_token' => hash('sha256', $currentRefreshToken),
+            'user_id' => $userId,
+        ]);
+
+        if ($deleteStmt->rowCount() !== 1) {
+            throw new \RuntimeException(
+                'The refresh session could not be consumed.'
+            );
+        }
+
+        $insertStmt = $this->db->prepare("
+        INSERT INTO sessions (
+            user_id,
+            refresh_token,
+            expires_at
+        )
+        VALUES (
+            :user_id,
+            :refresh_token,
+            :expires_at
+        )
+    ");
+
+        $insertStmt->execute([
+            'user_id' => $userId,
+            'refresh_token' => hash('sha256', $newRefreshToken),
+            'expires_at' => $newExpiresAt,
+        ]);
+    }
+
     public function rotateToken(
         string $currentRefreshToken,
         string $newRefreshToken,
@@ -103,80 +181,99 @@ class SessionRepository
         $currentTokenHash = hash('sha256', $currentRefreshToken);
         $newTokenHash = hash('sha256', $newRefreshToken);
 
-        try {
-            $this->db->beginTransaction();
+        $maxAttempts = 3;
 
-            /*
-             * Lock the current session row.
-             *
-             * If two requests try to rotate the same refresh token
-             * simultaneously, only one request can proceed at a time.
-             */
-            $stmt = $this->db->prepare("
-            SELECT *
-            FROM sessions
-            WHERE refresh_token = :refresh_token
-              AND expires_at > NOW()
-            LIMIT 1
-            FOR UPDATE
-        ");
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $this->db->beginTransaction();
 
-            $stmt->execute([
-                'refresh_token' => $currentTokenHash
-            ]);
+                // Lock the existing session.
+                $stmt = $this->db->prepare("
+                SELECT *
+                FROM sessions
+                WHERE refresh_token = :refresh_token
+                  AND expires_at > NOW()
+                LIMIT 1
+                FOR UPDATE
+            ");
 
-            $session = $stmt->fetch(PDO::FETCH_ASSOC);
+                $stmt->execute([
+                    'refresh_token' => $currentTokenHash
+                ]);
 
-            if (!$session) {
-                $this->db->rollBack();
-                return null;
+                $session = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$session) {
+                    $this->db->rollBack();
+                    return null;
+                }
+
+                // Consume the old token.
+                $deleteStmt = $this->db->prepare("
+                DELETE FROM sessions
+                WHERE refresh_token = :refresh_token
+            ");
+
+                $deleteStmt->execute([
+                    'refresh_token' => $currentTokenHash
+                ]);
+
+                // Store the replacement token hash.
+                $insertStmt = $this->db->prepare("
+                INSERT INTO sessions (
+                    user_id,
+                    refresh_token,
+                    expires_at
+                )
+                VALUES (
+                    :user_id,
+                    :refresh_token,
+                    :expires_at
+                )
+            ");
+
+                $insertStmt->execute([
+                    'user_id' => $session['user_id'],
+                    'refresh_token' => $newTokenHash,
+                    'expires_at' => $newExpiresAt,
+                ]);
+
+                $this->db->commit();
+
+                return $session;
+
+            } catch (\PDOException $e) {
+                if ($this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+
+                $errorCode = $e->errorInfo[1] ?? null;
+
+                // Retry only MariaDB/MySQL deadlock errors.
+                if ($errorCode === 1213 && $attempt < $maxAttempts) {
+                    usleep(random_int(50000, 150000));
+                    continue;
+                }
+
+                throw $e;
+
+            } catch (\Throwable $e) {
+                if ($this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+
+                throw $e;
             }
-
-            /*
-             * Consume the old refresh token.
-             */
-            $deleteStmt = $this->db->prepare("
-            DELETE FROM sessions
-            WHERE refresh_token = :refresh_token
-        ");
-
-            $deleteStmt->execute([
-                'refresh_token' => $currentTokenHash
-            ]);
-
-            /*
-             * Store only the hash of the new refresh token.
-             */
-            $insertStmt = $this->db->prepare("
-            INSERT INTO sessions (
-                user_id,
-                refresh_token,
-                expires_at
-            )
-            VALUES (
-                :user_id,
-                :refresh_token,
-                :expires_at
-            )
-        ");
-
-            $insertStmt->execute([
-                'user_id' => $session['user_id'],
-                'refresh_token' => $newTokenHash,
-                'expires_at' => $newExpiresAt,
-            ]);
-
-            $this->db->commit();
-
-            return $session;
-
-        } catch (\Throwable $e) {
-
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-
-            throw $e;
         }
+
+        return null;
     }
+
+
+
+    public function usesConnection(PDO $connection): bool
+    {
+        return $this->db === $connection;
+    }
+
 }

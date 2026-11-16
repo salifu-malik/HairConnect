@@ -4,6 +4,10 @@
     colors="true"
     cacheDirectory=".phpunit.cache"
 >
+    <php>
+        <env name="SUBSCRIPTION_DB_NAME" value="subscription_test_db" force="true"/>
+    </php>
+
     <testsuites>
         <testsuite name="HairConnect Backend">
             <directory>tests</directory>

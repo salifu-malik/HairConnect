@@ -61,7 +61,8 @@ try {
         $appointmentRepository,
         new BarberScheduleRepository(),
         $subscriptionRepository,
-        new CustomerBookingRestrictionRepository()
+        new CustomerBookingRestrictionRepository(),
+        new \App\Repositories\BarberShopMembershipRepository()
     );
 
     $appointmentService = new AppointmentService(

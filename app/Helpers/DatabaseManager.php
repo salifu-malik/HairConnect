@@ -13,6 +13,13 @@ class DatabaseManager {
         self::$config = $config;
     }
 
+    public static function resetConnection(string $name): void
+    {
+        if (isset(self::$instances[$name])) {
+            unset(self::$instances[$name]);
+        }
+    }
+
     public static function getConnection(string $name): PDO {
         if (!isset(self::$instances[$name])) {
             if (!isset(self::$config['connections'][$name])) {
